@@ -49,9 +49,12 @@ function selectionsPayload(selections) {
     .map(selectionPayload);
 }
 
-const DEFAULT_ALGORITHM_OPTION = { id: 'tree_guided', label: 'Area sweep', resumable: true };
+const DEFAULT_ALGORITHM_OPTION = { id: 'tree_full', label: 'Full loops', resumable: true };
+// Bumped when the default search changes: settings saved under the old default move to the new one once.
+const SEARCH_DEFAULT_VERSION = 2;
+const OLD_DEFAULT_ALGORITHM = 'tree_guided';
 // Every strategy the server has (dev ones only listed with LOOP_DEV=1).
-const AREA_SWEEP_IDS = ['tree_guided', 'tree_loops', 'tree_cover', 'tree_triangles', 'tree_triangles8', 'tree_full', 'loop_atlas'];
+const AREA_SWEEP_IDS = ['tree_full', 'tree_guided', 'tree_loops', 'tree_cover', 'tree_triangles', 'tree_triangles8', 'tree_full_slow', 'loop_atlas'];
 // Saved settings of search options that were removed.
 const REMOVED_SETTINGS = ['sim_ceiling', 'deduplication', 'cap_k', 'debug_snapshots', 'snapshot_every'];
 // Route length the slider allows, in miles (up to the server's limit).
@@ -69,6 +72,7 @@ const SETTING_DEFAULTS = {
   routes_per_pin: 10,
   more_algorithm: DEFAULT_ALGORITHM_OPTION.id,
   algorithm: DEFAULT_ALGORITHM_OPTION.id,
+  search_default: SEARCH_DEFAULT_VERSION,
   min_dist_m: 50,
   explore_weight: null,
   detour_weight: null,
@@ -86,6 +90,11 @@ function readSettings() {
     if (!saved) return { ...SETTING_DEFAULTS };
     const parsed = JSON.parse(saved);
     REMOVED_SETTINGS.forEach((key) => { delete parsed[key]; });
+    if (parsed.search_default !== SEARCH_DEFAULT_VERSION) {
+      if (parsed.algorithm === OLD_DEFAULT_ALGORITHM) parsed.algorithm = DEFAULT_ALGORITHM_OPTION.id;
+      if (parsed.more_algorithm === OLD_DEFAULT_ALGORITHM) parsed.more_algorithm = DEFAULT_ALGORITHM_OPTION.id;
+      parsed.search_default = SEARCH_DEFAULT_VERSION;
+    }
     if (!AREA_SWEEP_IDS.includes(parsed.algorithm)) parsed.algorithm = DEFAULT_ALGORITHM_OPTION.id;
     if (!AREA_SWEEP_IDS.includes(parsed.more_algorithm)) parsed.more_algorithm = parsed.algorithm;
     // Old road presets: the built-in table is Balanced; anything tuned stays as custom weights.
@@ -276,7 +285,7 @@ function App() {
     localStorage.setItem('units', value);
   }, []);
 
-  // The server sends the real list (only Area sweep unless it runs with LOOP_DEV=1).
+  // The server sends the real list (only Full loops unless it runs with LOOP_DEV=1).
   const [algorithms, setAlgorithms] = useState([DEFAULT_ALGORITHM_OPTION]);
   // The server runs with LOOP_DEV=1: dev tools (compare two generations) are shown.
   const [devMode, setDevMode] = useState(false);

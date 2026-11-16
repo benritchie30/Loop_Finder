@@ -33,7 +33,7 @@ export function settingsRows(generation, units, { allSearches = false } = {}) {
         ['Same route within', `${s.min_dist_m ?? 50} m`],
     ];
     if (allSearches) rows.push(['Search', s.algorithm || 'tree_guided']);
-    else if (s.algorithm && s.algorithm !== 'tree_guided') rows.push(['Search', s.algorithm]);
+    else if (s.algorithm && s.algorithm !== 'tree_full') rows.push(['Search', s.algorithm]);
     if (generation.markerPosition) {
         rows.push(['Start', `${generation.markerPosition.lat.toFixed(4)}, ${generation.markerPosition.lng.toFixed(4)}`]);
     }
