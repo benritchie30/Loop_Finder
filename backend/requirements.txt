@@ -1,5 +1,6 @@
 networkx
 websockets>=14  # server.py uses the asyncio server of websockets 14+
 shapely
+numpy  # loop_tree.py, graph_builder.py (shapely 2 needs it anyway)
 pyproj
 SRTM.py

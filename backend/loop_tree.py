@@ -33,6 +33,7 @@ import weakref
 from typing import Any, Callable, Dict, Generator, List, Optional
 
 import networkx as nx
+import numpy as np
 
 from road_stress import CROSSING_CAP, CROSSING_MAX_M, MILE_M, annotate_edge_stress
 import surface as surface_mod
@@ -230,6 +231,8 @@ class EdgeTable:
         self._cell_uids: Optional[Dict[tuple, List[int]]] = None
         self._samples: Dict[int, list] = {}
         self._steps: Optional[tuple] = None
+        self._pair_arrays: Optional[tuple] = None
+        self._arrays: Optional[tuple] = None
 
     def steps(self) -> tuple:
         """(onward, backward, at): per directed edge e, the edges a route
@@ -250,6 +253,35 @@ class EdgeTable:
                   for v in self.out}
             self._steps = (onward, backward, at)
         return self._steps
+
+    def arrays(self) -> tuple:
+        """(length, uid, head's node number, tail's node number) per
+        directed edge as numpy arrays, and the node of each number."""
+        if self._arrays is None:
+            node_ids = list(self.out)
+            number = {v: i for i, v in enumerate(node_ids)}
+            self._arrays = (np.array(self.length, dtype=np.float64), np.array(self.uid, dtype=np.int64),
+                            np.array([number[v] for v in self.head], dtype=np.int64),
+                            np.array([number[v] for v in self.tail], dtype=np.int64), node_ids)
+        return self._arrays
+
+    def pair_arrays(self) -> tuple:
+        """steps()'s junction table as arrays, one row per (arriving edge,
+        leaving edge) in the same order: (arriving, leaving, 1.0 where a
+        turn, junction number, node of each junction)."""
+        if self._pair_arrays is None:
+            at = self.steps()[2]
+            arr, lea, turn, junc = [], [], [], []
+            for j, rows in enumerate(at.values()):
+                for e, g, t in rows:
+                    arr.append(e)
+                    lea.append(g)
+                    turn.append(1.0 if t else 0.0)
+                    junc.append(j)
+            self._pair_arrays = (np.array(arr, dtype=np.int64), np.array(lea, dtype=np.int64),
+                                 np.array(turn, dtype=np.float64), np.array(junc, dtype=np.int64),
+                                 list(at))
+        return self._pair_arrays
 
     def node_cell(self, n, size_m):
         x, y = self._xy[n]
@@ -590,7 +622,7 @@ class Tree:
     route_hash identifies a state's whole route, so a later round can tell
     when it rebuilt the same route and skip pairs it already judged.
     """
-    __slots__ = ('forward', 'cost', 'dist', 'qual', 'par', 'done', 'route_hash', '_chains', 'order', '_span', 'touch', '_one_way')
+    __slots__ = ('forward', 'cost', 'dist', 'qual', 'par', 'done', 'route_hash', '_chains', 'order', '_span', 'touch', '_one_way', '_arrays')
 
     def __init__(self, forward, cost, dist, qual, par, done, route_hash, order=()):
         self.forward = forward
@@ -605,6 +637,15 @@ class Tree:
         self._span: Optional[tuple] = None
         self.touch: Optional[bytearray] = None  # see find_paths_tree
         self._one_way: Optional[bytearray] = None
+        self._arrays: Optional[tuple] = None
+
+    def arrays(self) -> tuple:
+        """(done, dist, qual) as numpy arrays, for pair_up."""
+        if self._arrays is None:
+            self._arrays = (np.frombuffer(bytes(self.done), dtype=np.uint8).astype(bool),
+                            np.array(self.dist, dtype=np.float64),
+                            np.array(self.qual, dtype=np.float64))
+        return self._arrays
 
     def one_way(self, rev) -> bytearray:
         """Per state: its route uses an edge with no reverse edge."""
@@ -721,10 +762,12 @@ def grow_tree(
     # adds to cost on top of that, and the length left after it at best
     # (INF where the edge may not be entered at all).
     steps = E.steps()[0 if forward else 1]
-    ride = [(s + x) * L for s, x, L in zip(stress, extra, length)]
-    steer = [(detour_per_m + penalty[u]) * L for u, L in zip(uid, length)]
+    # (numpy does the three passes; element by element it is the same arithmetic.)
+    length_a, uid_a, head_i, tail_i, node_ids = E.arrays()
+    ride = ((np.array(stress, dtype=np.float64) + np.array(extra, dtype=np.float64)) * length_a).tolist()
+    steer = ((detour_per_m + np.array(penalty, dtype=np.float64)[uid_a]) * length_a).tolist()
     get = bound.get
-    left = [get(n, INF) for n in (head if forward else tail)]
+    left = np.array([get(v, INF) for v in node_ids], dtype=np.float64)[head_i if forward else tail_i].tolist()
     if forbidden:
         for u in forbidden:
             for x in E.by_uid[u]:
@@ -997,6 +1040,53 @@ def find_paths_tree(
                          detour_per_m if detour is None else detour, pen,
                          should_stop, seeds=seeds, forbidden=forbidden or None)
 
+    spread_from: Dict[float, Any] = {}
+
+    def pair_all(T, B, least, per_node, anchor_b):
+        """pair_up's choice at every junction at once (numpy): the best
+        per_node pairs that share neither the arriving nor the leaving
+        road, as (score, arriving, leaving) in junction order. The same
+        arithmetic and tie order as the loop it replaces (which still
+        serves a single pin or area), so the same pairs."""
+        arr, lea, turn, junc, nodes = E.pair_arrays()
+        t_done, t_dist, t_qual = T.arrays()
+        b_done, b_dist, b_qual = B.arrays()
+        de = t_dist[arr]
+        total = de + b_dist[lea]
+        ok = t_done[arr] & b_done[lea] & (de >= least) & (total >= min_path_length) & (total <= max_path_length)
+        if anchor_b is not None:
+            # Junctions at least TRI_MIN_SPREAD degrees (seen from the start) from the anchor.
+            bear = spread_from.get('bearing')
+            if bear is None:
+                bear = spread_from['bearing'] = np.array(
+                    [E.bearing_from(start_node, v) if v != start_node else np.nan for v in nodes])
+            d = np.abs(anchor_b - bear) % 360.0
+            d = np.where(d <= 180.0, d, 360.0 - d)
+            ok &= (d >= TRI_MIN_SPREAD)[junc]  # nan (the start itself) compares False
+        rows = np.nonzero(ok)[0]
+        if not len(rows):
+            return []
+        e, g, j = arr[rows], lea[rows], junc[rows]
+        score = (t_qual[e] + b_qual[g] + turn[rows]) / (total[rows] / MILE_M)
+        order = np.lexsort((g, e, score, j))
+        e, g, j, score = e[order], g[order], j[order], score[order]
+        first = np.ones(len(j), dtype=bool)
+        first[1:] = j[1:] != j[:-1]
+        take = first
+        if per_node > 1:
+            # The second pair: the best one left that shares neither road with the first.
+            lead = np.maximum.accumulate(np.where(first, np.arange(len(j)), 0))
+            free = (e != e[lead]) & (g != g[lead])
+            where = np.nonzero(free)[0]
+            second = np.zeros(len(j), dtype=bool)
+            if len(where):
+                jf = j[where]
+                head = np.ones(len(where), dtype=bool)
+                head[1:] = jf[1:] != jf[:-1]
+                second[where[head]] = True
+            take = first | second
+        return list(zip(score[take].tolist(), e[take].tolist(), g[take].tolist()))
+
     def pair_up(T, B, prefix, min_leg, only_uids=None):
         """Queue T-route + B-route pairs joined at each junction.
 
@@ -1022,7 +1112,11 @@ def find_paths_tree(
                 for x in E.by_uid[u]:
                     junctions.add(E.tail[x])
                     junctions.add(E.head[x])
-        found = []
+        if only_uids is None:
+            found = pair_all(T, B, base + min_leg, per_node, anchor_b)
+            junctions = ()
+        else:
+            found = []
         at = E.steps()[2]
         t_done, t_dist, t_qual = T.done, T.dist, T.qual
         b_done, b_dist, b_qual = B.done, B.dist, B.qual
@@ -1389,6 +1483,7 @@ def find_paths_tree(
         nonlocal require, via, forbidden, batch, batch_rounds, best_qpm, dry, in_request, continuing
         nonlocal guided_orders, guided_cursor, guided_detour, heap, held, yielded_at_request, unpaved_at_request
         cleared.clear()
+        sampled.clear()
         approach.clear()
         yielded_at_request = yielded
         unpaved_at_request = stats['unpaved']
@@ -1465,15 +1560,17 @@ def find_paths_tree(
         """
         prefix, T, e, B, g, _key = cands[idx]
         F = eA = None
-        if touches(T, prefix)[e] if prefix is None or len(prefix) == 1 else True:
+        if prefix is not None and len(prefix) != 1:
+            return False
+        if (T.touch or touches(T, prefix))[e]:
             return False
         if prefix is not None:
             if in_request:
                 return False
             F, eA = prefix[0]
-            f_enter, f_leave = F.span()
+            f_enter, f_leave = F._span or F.span()
             f_at, f_done = f_enter[eA], F.done
-        enter, leave = T.span()
+        enter, leave = T._span or T.span()
         at = enter[e]
         inc, head, done, par = E.inc, E.head, T.done, B.par
         x = g
@@ -1510,25 +1607,47 @@ def find_paths_tree(
                 or total > max_path_length + slack
                 or (not longer and total < min_path_length - slack))
 
+    fresh_tot: List[float] = []  # lazy: per road, sum of 1 / (1 + times covered) over its cells
+    fresh_cnt: List[int] = []    # and how many cells
+    sampled: Dict[int, list] = {}  # lazy: candidate -> every LIKELY_STEP-th road of its tree routes
+
     def likely_novelty(idx):
         """Novelty of a candidate's tree routes as the cover stands, from
-        every LIKELY_STEP-th road along them (no walk is built)."""
-        prefix, T, e, B, g, _key = cands[idx]
-        uid, cells, get = E.uid, E.cells, cover.get
-        tot, cnt, i = 0.0, 0, 0
-        legs = [(T, e), (B, g)]
-        if prefix is not None:
-            legs.extend(prefix)
-        for tree, x in legs:
-            par = tree.par
-            while x >= 0:
-                if i % LIKELY_STEP == 0:
-                    for c in cells[uid[x]]:
-                        tot += 1.0 / (1 + get(c, 0))
-                        cnt += 1
-                i += 1
-                x = par[x]
-        return tot / cnt if cnt else 1.0
+        every LIKELY_STEP-th road along them (no walk is built). The roads
+        are read off the trees once per candidate; each road's own figures
+        are kept up to date by `covered`."""
+        roads = sampled.get(idx)
+        if roads is None:
+            prefix, T, e, B, g, _key = cands[idx]
+            uid = E.uid
+            roads, i = [], 0
+            legs = [(T, e), (B, g)]
+            if prefix is not None:
+                legs.extend(prefix)
+            for tree, x in legs:
+                par = tree.par
+                while x >= 0:
+                    if i % LIKELY_STEP == 0:
+                        roads.append(uid[x])
+                    i += 1
+                    x = par[x]
+            sampled[idx] = roads
+        if not fresh_cnt:
+            fresh_cnt.extend(len(cs) for cs in E.cells)
+            fresh_tot.extend(sum(1.0 / (1 + cover.get(c, 0)) for c in cs) for cs in E.cells)
+        cnt = sum([fresh_cnt[u] for u in roads])
+        return sum([fresh_tot[u] for u in roads]) / cnt if cnt else 1.0
+
+    def covered(cells):
+        """A sent loop covered `cells` once more: refresh the roads through them."""
+        if not fresh_cnt:
+            return
+        by_cell, get, all_cells = E.cell_uids(), cover.get, E.cells
+        stale = set()
+        for c in cells:
+            stale.update(by_cell.get(c, ()))
+        for u in stale:
+            fresh_tot[u] = sum(1.0 / (1 + get(c, 0)) for c in all_cells[u])
 
     def same_route(centroid, item):
         """deep: a sent route's centroid is within min_dist_m (the usual
@@ -1829,6 +1948,7 @@ def find_paths_tree(
                 for c in item['cells']:
                     cover[c] = cover.get(c, 0) + 1
                 cover_ver += 1
+                covered(item['cells'])
                 for x in item['loop_edges']:
                     penalty[E.uid[x]] += reuse_per_m
                 yielded += 1

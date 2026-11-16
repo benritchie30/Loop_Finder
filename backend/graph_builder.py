@@ -45,6 +45,7 @@ import time
 from typing import Dict, Iterable, List, Optional, Tuple
 
 import networkx as nx
+import numpy as np
 import shapely
 from shapely.geometry import LineString
 
@@ -528,18 +529,23 @@ def build_graph(
                                       (c[1] for w in kept_ways for c in w[2]))
         stats['boundary'] = boundary_mod.key(boundary)
     else:
-        # The reach is a disc: a way whose bounding box has all four corners
-        # in it is wholly inside, and most ways are.
-        flags = []
-        for w in kept_ways:
-            cs = w[2]
-            xs = [c[0] for c in cs]
-            ys = [c[1] for c in cs]
-            x0, x1, y0, y1 = min(xs), max(xs), min(ys), max(ys)
-            if inside(x0, y0) and inside(x0, y1) and inside(x1, y0) and inside(x1, y1):
-                flags.extend([True] * len(cs))
-            else:
-                flags.extend([inside(x, y) for x, y in zip(xs, ys)])
+        # Every point at once: the flat-earth distance settles all but the
+        # points near the rim, and those get the exact test one by one.
+        count = sum(len(w[2]) for w in kept_ways)
+        xs = np.fromiter((c[0] for w in kept_ways for c in w[2]), dtype=np.float64, count=count)
+        ys = np.fromiter((c[1] for w in kept_ways for c in w[2]), dtype=np.float64, count=count)
+        dx, dy = xs - lng, ys - lat
+        in_box = (np.abs(dy) <= r_lat) & (np.abs(dx) <= r_lng)
+        if radius < 200000.0:
+            d2 = (dx * kx) ** 2 + (dy * 111320.0) ** 2
+            flags_a = in_box & (d2 < surely_in)
+            rim = np.nonzero(in_box & (d2 >= surely_in) & (d2 <= surely_out))[0]
+        else:
+            flags_a = np.zeros(count, dtype=bool)
+            rim = np.nonzero(in_box)[0]
+        for i in rim.tolist():
+            flags_a[i] = haversine(lng, lat, float(xs[i]), float(ys[i])) <= radius
+        flags = flags_a.tolist()
     base = 0
     for way_id, node_ids, coords, tags in kept_ways:
         d = direction(tags)
@@ -575,7 +581,8 @@ def build_graph(
             etags = tag_cache[way_id] = _edge_tags(tags)
         start, length = 0, 0.0
         # haversine() inline, the latitude terms of each point reused for
-        # the next piece (the same arithmetic, so the same lengths).
+        # the next piece (the same arithmetic, so the same lengths; numpy's
+        # sin / cos differ from math's in the last digit on some edges).
         a = coords[0]
         p1 = radians(a[1])
         c1 = cos(p1)
