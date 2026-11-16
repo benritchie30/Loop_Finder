@@ -14,7 +14,8 @@
 - [ ] Steepness limits: a max-grade filter (total climb and climb rate miss a single steep wall); steep sections marked red on the elevation chart and the map.
 - [ ] Include `highway=track` in the download filter (forest and farm tracks: a lot of the real gravel riding). Bumps `FILTER_VERSION`, so every tile is downloaded again.
 - [ ] Send a route straight to Ride with GPS (their API needs a registered app and each visitor logging in to RWGPS; Strava's API cannot create routes, so GPX import stays the way there).
-
+- fix roads like georges gap. When there are two edges to take and they are really short choose the best one.
+- 
 ## Done
 
 - [x] Search area on the map: the automatic area is drawn like a custom boundary (a grey dotted circle of max / 2 around the start). A custom boundary replaces it instead of being drawn over it, an open generation's follows the More routes length slider, and the plan's follows the plan's.

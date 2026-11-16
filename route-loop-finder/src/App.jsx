@@ -54,7 +54,7 @@ const DEFAULT_ALGORITHM_OPTION = { id: 'tree_full', label: 'Full loops', resumab
 const SEARCH_DEFAULT_VERSION = 2;
 const OLD_DEFAULT_ALGORITHM = 'tree_guided';
 // Every strategy the server has (dev ones only listed with LOOP_DEV=1).
-const AREA_SWEEP_IDS = ['tree_full', 'tree_guided', 'tree_loops', 'tree_cover', 'tree_triangles', 'tree_triangles8', 'tree_full_slow', 'loop_atlas'];
+const AREA_SWEEP_IDS = ['tree_full', 'tree_full_deep', 'tree_guided', 'tree_loops', 'tree_cover', 'tree_triangles', 'tree_triangles8', 'tree_full_slow', 'loop_atlas'];
 // Saved settings of search options that were removed.
 const REMOVED_SETTINGS = ['sim_ceiling', 'deduplication', 'cap_k', 'debug_snapshots', 'snapshot_every'];
 // Route length the slider allows, in miles (up to the server's limit).

@@ -24,6 +24,13 @@ ALGORITHMS: Dict[str, Dict[str, Any]] = {
                  'lazy': True, 'pace': True},
         'resumable': True,
     },
+    'tree_full_deep': {
+        'label': 'Full loops, every route through pins / areas',
+        'tree': {'guided': True, 'triangles': True, 'anchors_per_round': 8, 'stem_weight': 1.0,
+                 'lazy': True, 'pace': True, 'deep': True},
+        'resumable': True,
+        'dev': True,
+    },
     'tree_guided': {
         'label': 'Area sweep (the default before Full loops)',
         'tree': {'guided': True},

@@ -145,5 +145,43 @@ class StartTests(unittest.TestCase):
         self.assertGreater(len(routes(G, start)), 0)
 
 
+class DeepRequestTests(unittest.TestCase):
+    """`tree_full_deep`: a search through a pin keeps going past the usual
+    round limit, and every route it sends still passes the pin."""
+
+    def through_pin(self, algorithm):
+        from loop_tree import edge_table, resolve_selections
+        G, start, _ = build(at(2, 2))
+        lng, lat = at(0, 3.25)  # on row 0, between columns 3 and 4
+        chosen = resolve_selections(G, [{'id': 'p', 'type': 'include', 'shape': 'point',
+                                         'lat': lat, 'lng': lng}])
+        self.assertTrue(chosen['results'][0]['ok'])
+        pin = chosen['require'][0]
+        E = edge_table(G)
+        found = []
+        for item in find_paths(G, start, min_path_length=2000, max_path_length=MAX_M,
+                               loop_ratio_floor=0.5, min_loop_length=600, algorithm=algorithm,
+                               min_dist_m=10.0, require=[sorted(pin)]):
+            if is_idle(item) or len(found) >= 400:
+                break
+            found.append(item)
+        return found, pin, E
+
+    def test_deep_finds_at_least_as_many_routes_through_a_pin(self):
+        usual, _pin, _E = self.through_pin('tree_full')
+        deep, pin, E = self.through_pin('tree_full_deep')
+        self.assertGreater(len(usual), 0)
+        self.assertGreaterEqual(len(deep), len(usual))
+        lines = [tuple(map(tuple, f['geometry']['coordinates'])) for f in deep]
+        self.assertEqual(len(lines), len(set(lines)))  # no route twice
+        # Every route passes both ends of the pinned road.
+        def spot(pt):
+            return (round(pt[0], 7), round(pt[1], 7))
+
+        ends = [(spot(E.geom[u][0]), spot(E.geom[u][-1])) for u in pin]
+        for f in deep:
+            pts = {spot(c) for c in f['geometry']['coordinates']}
+            self.assertTrue(any(a in pts and b in pts for a, b in ends))
+
 if __name__ == '__main__':
     unittest.main()

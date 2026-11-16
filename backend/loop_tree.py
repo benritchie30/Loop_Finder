@@ -75,6 +75,11 @@ GUIDE_DETOURS = (1.0, 2.0, 4.0, 8.0)  # turns per mile on guided legs; escalates
 GUIDE_PENALTY_CAP = 3.0  # turns per mile; routes through one pin pile reuse penalty on few roads
 PAVED_NOTE_BELOW = 5  # Paved only explains the loops it left out when a pass sends fewer than this
 GUIDE_DEFER_RATIO = 3.0  # guided routes spread wider in quality, so defer less eagerly
+DEEP_MAX_ROUNDS = 60  # `deep`: rounds per request
+DEEP_DRY_ROUNDS = 3  # `deep`: dry rounds in a row (after the last detour level) that end a request
+DEEP_APPROACH_AVOID = 4.0  # `deep`: turns per mile on each earlier way out to the pins, per use
+DEEP_APPROACH_CAP = 16.0  # `deep`: at most this much, so the only way there stays usable
+DEEP_SAME_SHARE = 0.85  # `deep`: a loop sharing this much of its length with a nearby one is the same route
 GUIDE_PER_ANCHOR = 1000  # pairs kept per guided leg; most lose to the doubled stem in shaping
 
 
@@ -832,6 +837,7 @@ def find_paths_tree(
     stem_weight: float = 0.0,
     lazy: bool = False,
     pace: bool = False,
+    deep: bool = False,
     policy: str = 'best',
     noise: float = 0.0,
     guided: bool = False,
@@ -863,6 +869,15 @@ def find_paths_tree(
     anchors per round shrink in proportion (at least PACE_MIN_ANCHORS) and
     a deferral regrow waits until the round has sent one more route per
     PACE_STATES states.
+
+    deep: a request with pins / areas to pass keeps going until it has
+    nothing left, for "every route through here". Up to DEEP_MAX_ROUNDS
+    rounds (not GUIDE_MAX_ROUNDS) and DEEP_DRY_ROUNDS dry ones; every other
+    round charges DEEP_APPROACH_AVOID turns per mile on the roads earlier rounds
+    rode out to the pins, so the outbound tree reaches them another way;
+    and a loop whose centroid is near a sent one's is only the same route
+    if it also shares DEEP_SAME_SHARE of its length with it (two loops
+    through one pin often have close centroids and different roads).
 
     policy 'best': one stream ordered by score, with deferral rounds.
     policy 'cover': an area pass first sends, best first, only loops adding
@@ -920,6 +935,8 @@ def find_paths_tree(
     per_round = anchors_per_round  # anchors a round, and routes a round must send
     defer_after = 1                # before a deferral regrow (see `pace`)
     cleared = set()  # lazy: candidates that passed `doomed`
+    approach: Dict[int, float] = {}  # deep: cost per metre on roads ridden out to the pins so far
+    sent_loops: Dict[tuple, frozenset] = {}  # deep: centroid -> loop roads of each route sent
     to_start = _node_dist(E, start_node, forward=False)
     from_start = _node_dist(E, start_node, forward=True)
 
@@ -1299,6 +1316,12 @@ def find_paths_tree(
                 break
             prefix = ((F, first),)
             crossed = {E.uid[x] for x in F.chain(first)}
+            if deep:
+                # The next round's outbound tree is steered off this way out
+                # (never off the required roads themselves).
+                pinned = set().union(*require)
+                for u in crossed - pinned:
+                    approach[u] = approach.get(u, 0.0) + DEEP_APPROACH_AVOID / MILE_M
             failed = False
             for i, ci in enumerate(order[1:], start=1):
                 if require[ci] & crossed:
@@ -1328,6 +1351,11 @@ def find_paths_tree(
         yielded_at_round = yielded
         cap = GUIDE_PENALTY_CAP / MILE_M
         pen = [p if p <= cap else cap for p in penalty]
+        if deep and approach and batch_rounds % 2 == 0:
+            # Every other round; the rounds between keep the best way out.
+            top = DEEP_APPROACH_CAP / MILE_M
+            for u, extra_pen in approach.items():
+                pen[u] += extra_pen if extra_pen <= top else top
         if guided_orders is None:
             guided_orders = plan_orders()
         n = len(guided_orders)
@@ -1361,6 +1389,7 @@ def find_paths_tree(
         nonlocal require, via, forbidden, batch, batch_rounds, best_qpm, dry, in_request, continuing
         nonlocal guided_orders, guided_cursor, guided_detour, heap, held, yielded_at_request, unpaved_at_request
         cleared.clear()
+        approach.clear()
         yielded_at_request = yielded
         unpaved_at_request = stats['unpaved']
         for _s, _q, idx, _v in heap + held:
@@ -1500,6 +1529,26 @@ def find_paths_tree(
                 i += 1
                 x = par[x]
         return tot / cnt if cnt else 1.0
+
+    def same_route(centroid, item):
+        """deep: a sent route's centroid is within min_dist_m (the usual
+        rule, same arithmetic as _is_centroid_too_close) and, where its
+        roads are known, it shares DEEP_SAME_SHARE of this loop's length."""
+        if not centroid:
+            return False
+        lat, lng = centroid
+        limit = (min_dist_m / 111139.0) ** 2
+        edges = item['loop_edges']
+        for c in centroids:
+            if (lat - c[0]) ** 2 + (lng - c[1]) ** 2 >= limit:
+                continue
+            roads = sent_loops.get(c)
+            if roads is None:
+                return True  # a route from elsewhere in the generation
+            shared = sum(E.length[x] for x in edges if E.uid[x] in roads)
+            if shared >= DEEP_SAME_SHARE * item['loop_dist']:
+                return True
+        return False
 
     def validate(idx):
         stats['validated'] += 1
@@ -1644,7 +1693,7 @@ def find_paths_tree(
     def can_round():
         """Another regrow is allowed in this pass."""
         if in_request:
-            return batch_rounds < GUIDE_MAX_ROUNDS
+            return batch_rounds < (DEEP_MAX_ROUNDS if deep and require else GUIDE_MAX_ROUNDS)
         return rounds < round_cap
 
     def report(label):
@@ -1671,7 +1720,7 @@ def find_paths_tree(
                             dry = dry + 1 if yielded == yielded_at_round else 0
                             if dry and require and escalate():
                                 dry = 0
-                        if dry >= GUIDE_DRY_ROUNDS or not can_round():
+                        if dry >= (DEEP_DRY_ROUNDS if deep and require else GUIDE_DRY_ROUNDS) or not can_round():
                             break
                     elif policy == 'best':
                         if rounds >= max_rounds or yielded == 0:
@@ -1744,7 +1793,8 @@ def find_paths_tree(
                     continue
                 seen_paths.add(key)
                 centroid = _calculate_path_centroid(G, path)
-                if _is_centroid_too_close(centroid, centroids, min_dist_m=min_dist_m):
+                if (same_route(centroid, item) if deep and in_request and require
+                        else _is_centroid_too_close(centroid, centroids, min_dist_m=min_dist_m)):
                     stats['near_dup'] += 1
                     if continuing:
                         # Re-found a route this generation already has: penalize
@@ -1772,6 +1822,8 @@ def find_paths_tree(
 
                 if centroid:
                     centroids.append(centroid)
+                    if deep:
+                        sent_loops[centroid] = frozenset(E.uid[x] for x in item['loop_edges'])
                 if best_qpm is None or item['qpm'] < best_qpm:
                     best_qpm = item['qpm']
                 for c in item['cells']:
