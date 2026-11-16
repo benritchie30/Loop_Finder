@@ -58,7 +58,8 @@ setting it cannot read (then it uses the default).
 | `LOOP_HOST` | address to listen on (default `localhost`; keep it behind a web server on the same machine) |
 | `LOOP_MAX_MILES` | longest route anyone can ask for (default 50; the UI slider stops at 50 mi / 80 km) |
 | `LOOP_ALLOWED_ORIGINS` | sites whose pages may connect, comma-separated (e.g. `https://loops.example.com`); unset: any (local use). A refused page is logged (`Refused a page from ...`) |
-| `LOOP_CONTACT` | email or project URL sent to the public map data servers with each download (default: a placeholder, which a public server warns about) |
+| `LOOP_CONTACT` | email or project URL sent to the public map data servers with each download (default: none is sent; a public server warns about that) |
+| `LOOP_MAP_SLOTS` | map downloads at a time per server in `OVERPASS_URL` (default 2, what overpass-api.de allows one address) |
 | `LOOP_MAX_CONN_PER_IP` | open connections (tabs) per visitor address (default 8); more get HTTP 429 and the UI retries |
 | `LOOP_MAX_CONNECTIONS` | open connections in all (default 100) |
 | `LOOP_SEARCH_SLOTS` | searches / map builds running at once, all visitors (default 1; the rest wait their turn and are told so) |

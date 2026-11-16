@@ -1,0 +1,19 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "backend-dev",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["backend/server.py"],
+      "env": { "LOOP_DEV": "1", "LOOP_PORT": "8798" },
+      "port": 8798
+    },
+    {
+      "name": "ui-dev",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["--prefix", "route-loop-finder", "vite", "route-loop-finder", "--port", "5198", "--strictPort"],
+      "env": { "LOOP_PORT": "8798" },
+      "port": 5198
+    }
+  ]
+}

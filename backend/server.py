@@ -25,7 +25,7 @@ import limits
 import surface as surface_mod
 from areas import Areas, MapError, tiles_needed
 from graph_builder import BuildError
-from loop_generator import find_paths, is_resumable, list_algorithms, resolve_algorithm
+from loop_generator import DEV, find_paths, is_resumable, list_algorithms, resolve_algorithm
 from loop_tree import is_idle, resolve_selections
 from map_store import TILE_DEG, MapStore
 from road_stress import preference_weights
@@ -101,7 +101,7 @@ async def handler(websocket):
 
 async def _serve_connection(websocket):
     print(f"Client connected ({sum(CONNECTIONS.values())} open)")
-    await send(websocket, {"type": "ALGORITHMS_LIST", "algorithms": list_algorithms()})
+    await send(websocket, {"type": "ALGORITHMS_LIST", "algorithms": list_algorithms(), "dev": DEV})
     await send(websocket, map_info())
 
     # One running batch per connection. Each batch gets a fresh stop Event;
@@ -608,7 +608,7 @@ async def _run_generation(websocket, data, gen_state):
 
     # 3. Every generation keeps a session: start, settings, graph, and the
     # centroids of every route sent, so later batches never repeat a route.
-    # A tree_guided generator is parked in it. The search runs in a worker
+    # A resumable (tree_full) generator is parked in it. The search runs in a worker
     # thread so STOP_GENERATION gets through; it reads the session's stop
     # flag, which each batch points at the stop Event of whoever runs it.
     session = _new_session(path_set_id, lat, lng, area, kwargs, algorithm, data)
@@ -642,7 +642,7 @@ async def _continue_generation(websocket, data, gen_state):
     (optional) are the generation's settings for this batch: a new length or
     road choice restarts the search (no repeats) and may grow the area.
     `rebuild` lets the server recreate the generation if it lost it. A
-    parked tree_guided generator with unchanged settings resumes in place;
+    parked generator with unchanged settings resumes in place;
     otherwise a fresh one runs, seeded with every route the generation has,
     and is parked for the next batch.
     """

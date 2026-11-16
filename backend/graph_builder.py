@@ -45,6 +45,7 @@ import time
 from typing import Dict, Iterable, List, Optional, Tuple
 
 import networkx as nx
+import shapely
 from shapely.geometry import LineString
 
 import boundary as boundary_mod
@@ -67,6 +68,11 @@ MIN_BLOCK_M = 3000.0   # biconnected blocks shorter than this are pruned unless 
 MARGIN_M = 800.0       # beyond max/2: room for one-way detours near the edge of reach
 TRIM_SLACK_M = 1000.0  # road-distance trim keeps from_start + to_start <= max + this
 EARTH_R = 6371008.8
+
+
+# shapely 2 builds a line from a coordinate list without a Python pass over
+# its points; shapely 1 only has the class.
+_line = getattr(shapely, 'linestrings', None) or LineString
 
 
 class BuildError(ValueError):
@@ -161,7 +167,12 @@ def _prune_nodes(U: nx.Graph, min_block_m: float) -> Optional[set]:
     plus every block and cut vertex on the way between two such blocks.
     None when there is no large block at all (keep everything)."""
     blocks = list(nx.biconnected_components(U))
-    cut = set(nx.articulation_points(U))
+    # A cut vertex is a node in more than one block (one pass over the
+    # blocks instead of a second search of the graph).
+    once, cut = set(), set()
+    for comp in blocks:
+        cut.update(comp & once)
+        once.update(comp)
 
     lengths = []
     for comp in blocks:
@@ -403,21 +414,29 @@ def _snap_node(runs, lat: float, lng: float, usable: Optional[set] = None) -> Op
         return ((c[0] - lng) * k * m_per_deg, (c[1] - lat) * m_per_deg)
 
     best_d, best = math.inf, None
+    kx = k * m_per_deg
+    hypot = math.hypot
     for _w, nodes, coords, _t, _d in runs:
         if usable is not None and nodes[0] not in usable and nodes[-1] not in usable:
             continue
-        prev = xy(coords[0])
+        c = coords[0]
+        px, py = (c[0] - lng) * kx, (c[1] - lat) * m_per_deg
         for i in range(1, len(coords)):
-            cur = xy(coords[i])
-            dx, dy = cur[0] - prev[0], cur[1] - prev[1]
+            c = coords[i]
+            cx, cy = (c[0] - lng) * kx, (c[1] - lat) * m_per_deg
+            # A piece wholly beyond the best distance on one side cannot win.
+            if ((px > best_d and cx > best_d) or (px < -best_d and cx < -best_d)
+                    or (py > best_d and cy > best_d) or (py < -best_d and cy < -best_d)):
+                px, py = cx, cy
+                continue
+            dx, dy = cx - px, cy - py
             den = dx * dx + dy * dy
-            t = 0.0 if den == 0 else max(0.0, min(1.0, -(prev[0] * dx + prev[1] * dy) / den))
-            d = math.hypot(prev[0] + dx * t, prev[1] + dy * t)
+            t = 0.0 if den == 0 else max(0.0, min(1.0, -(px * dx + py * dy) / den))
+            d = hypot(px + dx * t, py + dy * t)
             if d < best_d:
                 best_d = d
-                near_prev = math.hypot(*prev) <= math.hypot(*cur)
-                best = nodes[i - 1] if near_prev else nodes[i]
-            prev = cur
+                best = nodes[i - 1] if hypot(px, py) <= hypot(cx, cy) else nodes[i]
+            px, py = cx, cy
     return best
 
 
@@ -474,9 +493,23 @@ def build_graph(
     r_lat = radius / 111320.0
     r_lng = radius / (111320.0 * max(k, 0.05))
 
+    # A flat-earth distance settles all but the points near the rim (it is
+    # within a fraction of a percent at these sizes); only those get the
+    # exact test, so the result is the same.
+    surely_in, surely_out = (0.98 * radius) ** 2, (1.02 * radius) ** 2
+    kx = 111320.0 * k
+
     def inside(x, y):
-        if abs(y - lat) > r_lat or abs(x - lng) > r_lng:
+        dy = y - lat
+        dx = x - lng
+        if abs(dy) > r_lat or abs(dx) > r_lng:
             return False
+        if radius < 200000.0:
+            d2 = (dx * kx) ** 2 + (dy * 111320.0) ** 2
+            if d2 < surely_in:
+                return True
+            if d2 > surely_out:
+                return False
         return haversine(lng, lat, x, y) <= radius
 
     coord: Dict[int, tuple] = {}
@@ -495,7 +528,18 @@ def build_graph(
                                       (c[1] for w in kept_ways for c in w[2]))
         stats['boundary'] = boundary_mod.key(boundary)
     else:
-        flags = [inside(c[0], c[1]) for w in kept_ways for c in w[2]]
+        # The reach is a disc: a way whose bounding box has all four corners
+        # in it is wholly inside, and most ways are.
+        flags = []
+        for w in kept_ways:
+            cs = w[2]
+            xs = [c[0] for c in cs]
+            ys = [c[1] for c in cs]
+            x0, x1, y0, y1 = min(xs), max(xs), min(ys), max(ys)
+            if inside(x0, y0) and inside(x0, y1) and inside(x1, y0) and inside(x1, y1):
+                flags.extend([True] * len(cs))
+            else:
+                flags.extend([inside(x, y) for x, y in zip(xs, ys)])
     base = 0
     for way_id, node_ids, coords, tags in kept_ways:
         d = direction(tags)
@@ -524,15 +568,28 @@ def build_graph(
 
     tag_cache: Dict[int, dict] = {}
     segments: List[Segment] = []
+    radians, sin, cos, asin, sqrt = math.radians, math.sin, math.cos, math.asin, math.sqrt
     for way_id, nodes, coords, tags, d in runs:
         etags = tag_cache.get(way_id)
         if etags is None:
             etags = tag_cache[way_id] = _edge_tags(tags)
         start, length = 0, 0.0
-        for i in range(1, len(nodes)):
-            a, b = coords[i - 1], coords[i]
-            length += haversine(a[0], a[1], b[0], b[1])
-            if use[nodes[i]] > 1 or i == len(nodes) - 1:
+        # haversine() inline, the latitude terms of each point reused for
+        # the next piece (the same arithmetic, so the same lengths).
+        a = coords[0]
+        p1 = radians(a[1])
+        c1 = cos(p1)
+        x1 = a[0]
+        last = len(nodes) - 1
+        for i in range(1, last + 1):
+            b = coords[i]
+            p2 = radians(b[1])
+            c2 = cos(p2)
+            x2 = b[0]
+            length += 2 * EARTH_R * asin(sqrt(
+                sin((p2 - p1) / 2) ** 2 + c1 * c2 * sin(radians(x2 - x1) / 2) ** 2))
+            p1, c1, x1 = p2, c2, x2
+            if use[nodes[i]] > 1 or i == last:
                 u, v = nodes[start], nodes[i]
                 if u != v and length > 0:
                     seg = Segment(nodes[start:i + 1], coords[start:i + 1], length, 1 if d else 0,
@@ -620,11 +677,11 @@ def build_graph(
     for (a, b), s in sorted(best.items(), key=lambda item: item[0]):
         line = lines.get(id(s))
         if line is None:
-            line = lines[id(s)] = LineString(s.coords)
+            line = lines[id(s)] = _line(s.coords)
         # Geometry and parts both run a -> b (parts in order along the edge:
         # where a gravel stretch is inside a merged road).
         forward = a == s.u
-        geom = line if forward else LineString(s.coords[::-1])
+        geom = line if forward else _line(s.coords[::-1])
         parts = s.parts if forward else s.parts[::-1]
         G.add_edge(a, b, length=s.length, geometry=geom, osmid=s.osmid, parts=parts, **s.tags)
     annotate_edge_stress(G)

@@ -1,16 +1,16 @@
 """Search entry point: strategy registry and the find_paths dispatcher.
 
 Every strategy is the Area Sweep (best-route trees, see loop_tree.py) with a
-different configuration. The app uses `tree_guided`. The others are kept for
-comparison in tools/bench_search.py and only show up in the UI when the
-server runs with LOOP_DEV=1.
+different configuration. The app uses `tree_full`. The others are kept for
+comparison in tools/algo_lab.py and only show up in the UI when the server
+runs with LOOP_DEV=1.
 """
 import os
 from typing import Any, Callable, Dict, Generator, List, Optional
 
 import networkx as nx
 
-DEFAULT_ALGORITHM = 'tree_guided'
+DEFAULT_ALGORITHM = 'tree_full'
 DEV = os.environ.get('LOOP_DEV', '').strip().lower() in ('1', 'true', 'yes', 'on')
 
 # tree: keyword arguments for loop_tree.find_paths_tree.
@@ -18,10 +18,17 @@ DEV = os.environ.get('LOOP_DEV', '').strip().lower() in ('1', 'true', 'yes', 'on
 # requests (pins, areas, roads, "more routes").
 # dev: hidden from the UI unless LOOP_DEV=1.
 ALGORITHMS: Dict[str, Dict[str, Any]] = {
+    'tree_full': {
+        'label': 'Full loops',
+        'tree': {'guided': True, 'triangles': True, 'anchors_per_round': 8, 'stem_weight': 1.0,
+                 'lazy': True, 'pace': True},
+        'resumable': True,
+    },
     'tree_guided': {
-        'label': 'Area sweep',
+        'label': 'Area sweep (the default before Full loops)',
         'tree': {'guided': True},
         'resumable': True,
+        'dev': True,
     },
     'tree_loops': {
         'label': 'Area sweep, one pass (not resumable)',
@@ -36,6 +43,16 @@ ALGORITHMS: Dict[str, Dict[str, Any]] = {
     'tree_triangles': {
         'label': 'Area sweep + three-leg loops',
         'tree': {'triangles': True},
+        'dev': True,
+    },
+    'tree_triangles8': {
+        'label': 'Three-leg loops, 8 anchors a round (lower stress, slower)',
+        'tree': {'triangles': True, 'anchors_per_round': 8},
+        'dev': True,
+    },
+    'tree_full_slow': {
+        'label': 'Full loops without lazy building and pacing',
+        'tree': {'triangles': True, 'anchors_per_round': 8, 'stem_weight': 1.0},
         'dev': True,
     },
     'loop_atlas': {

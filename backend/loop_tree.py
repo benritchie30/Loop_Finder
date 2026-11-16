@@ -57,6 +57,9 @@ COVER_MIN_NEW = 3
 COVER_TIERS = (0.25, 0.1)  # share of a loop's cells that must be new, per area pass
 COVER_QPM_CAP = 3.0  # area pass holds back loops worse than this × the best sent
 DRY_ROUNDS = 3
+PACE_STATES = 6000  # see find_paths_tree `pace`
+PACE_MIN_ANCHORS = 2
+LIKELY_STEP = 3  # lazy: roads sampled along a candidate's tree routes
 MAX_ROUNDS_ALL = 60
 INF = float('inf')
 
@@ -139,6 +142,10 @@ class EdgeTable:
 
     def __init__(self, G: nx.MultiDiGraph):
         from route_features import _oriented_edge_geom
+        try:
+            from shapely import get_coordinates  # shapely 2
+        except ImportError:
+            get_coordinates = None
 
         ys = [d['y'] for _, d in G.nodes(data=True)]
         k = math.cos(math.radians(sorted(ys)[len(ys) // 2])) if ys else 1.0
@@ -161,7 +168,17 @@ class EdgeTable:
             if u == v or (self.out[u] and any(self.head[e] == v for e in self.out[u])):
                 continue
             data = G[u][v][0]
-            coords = list(_oriented_edge_geom(G, u, v).coords)
+            # A built graph's geometry already runs u -> v: read it straight
+            # (one call, no pass over shapely's coordinate objects).
+            coords = None
+            geom = data.get('geometry')
+            if get_coordinates is not None and geom is not None and geom.geom_type == 'LineString':
+                coords = [tuple(c) for c in get_coordinates(geom).tolist()]
+                node = G.nodes[u]
+                if len(coords) < 2 or coords[0] != (node['x'], node['y']):
+                    coords = None
+            if coords is None:
+                coords = list(_oriented_edge_geom(G, u, v).coords)
             ku = math.cos(math.radians(coords[0][1]))
             p_out = _point_along(coords, ku, TANGENT_M)
             p_in = _point_along(coords[::-1], ku, TANGENT_M)
@@ -207,6 +224,27 @@ class EdgeTable:
         self._detours: Dict[int, tuple] = {}
         self._cell_uids: Optional[Dict[tuple, List[int]]] = None
         self._samples: Dict[int, list] = {}
+        self._steps: Optional[tuple] = None
+
+    def steps(self) -> tuple:
+        """(onward, backward, at): per directed edge e, the edges a route
+        can take next after e as (edge, its far node, is a turn), U-turns
+        left out, and the same for the edges before e. `at` lists per
+        junction every (arriving edge, leaving edge, is a turn). Bearings
+        never change, so this is built once per graph."""
+        if self._steps is None:
+            tail, head, b_in, b_out = self.tail, self.head, self.b_in, self.b_out
+            onward, backward = [], []
+            for e in range(self.n):
+                bi, bo, t, h = b_in[e], b_out[e], tail[e], head[e]
+                onward.append(tuple((x, head[x], _delta(bi, b_out[x]) >= TURN_DEG)
+                                    for x in self.out[h] if head[x] != t))
+                backward.append(tuple((x, tail[x], _delta(b_in[x], bo) >= TURN_DEG)
+                                      for x in self.inc[t] if tail[x] != h))
+            at = {v: tuple((e, g, turn) for e in self.inc[v] for g, _w, turn in onward[e])
+                  for v in self.out}
+            self._steps = (onward, backward, at)
+        return self._steps
 
     def node_cell(self, n, size_m):
         x, y = self._xy[n]
@@ -547,9 +585,9 @@ class Tree:
     route_hash identifies a state's whole route, so a later round can tell
     when it rebuilt the same route and skip pairs it already judged.
     """
-    __slots__ = ('forward', 'cost', 'dist', 'qual', 'par', 'done', 'route_hash', '_chains')
+    __slots__ = ('forward', 'cost', 'dist', 'qual', 'par', 'done', 'route_hash', '_chains', 'order', '_span', 'touch', '_one_way')
 
-    def __init__(self, forward, cost, dist, qual, par, done, route_hash):
+    def __init__(self, forward, cost, dist, qual, par, done, route_hash, order=()):
         self.forward = forward
         self.cost = cost
         self.dist = dist
@@ -558,6 +596,51 @@ class Tree:
         self.done = done
         self.route_hash = route_hash
         self._chains: Dict[int, List[int]] = {}
+        self.order = order  # states in the order settled (parents first)
+        self._span: Optional[tuple] = None
+        self.touch: Optional[bytearray] = None  # see find_paths_tree
+        self._one_way: Optional[bytearray] = None
+
+    def one_way(self, rev) -> bytearray:
+        """Per state: its route uses an edge with no reverse edge."""
+        if self._one_way is None:
+            par = self.par
+            flag = bytearray(len(par))
+            for e in self.order:
+                p = par[e]
+                if rev[e] < 0 or (p >= 0 and flag[p]):
+                    flag[e] = 1
+            self._one_way = flag
+        return self._one_way
+
+    def span(self) -> tuple:
+        """(enter, leave) numbering of the states: x is on the route of e
+        (or is e) exactly when enter[x] <= enter[e] < leave[x]."""
+        if self._span is None:
+            par = self.par
+            n = len(par)
+            enter, leave = [0] * n, [0] * n
+            # Children settle after their parent, so one pass in reverse
+            # order sizes every subtree and one forward pass numbers them.
+            size = [1] * n
+            for e in reversed(self.order):
+                p = par[e]
+                if p >= 0:
+                    size[p] += size[e]
+            nxt = [0] * n  # next free number inside each state's subtree
+            clock = 0
+            for e in self.order:
+                p = par[e]
+                if p >= 0:
+                    enter[e] = nxt[p]
+                    nxt[p] += size[e]
+                else:
+                    enter[e] = clock
+                    clock += size[e]
+                nxt[e] = enter[e] + 1
+                leave[e] = enter[e] + size[e]
+            self._span = (enter, leave)
+        return self._span
 
     def chain(self, e) -> List[int]:
         """Edges in travel order: start→e (forward) or e→start (backward)."""
@@ -629,46 +712,53 @@ def grow_tree(
             cost[e], dist[e], qual[e] = c, L, d
             heapq.heappush(heap, (c, e))
 
+    # Per edge, fixed for this run: what riding it adds to quality, what it
+    # adds to cost on top of that, and the length left after it at best
+    # (INF where the edge may not be entered at all).
+    steps = E.steps()[0 if forward else 1]
+    ride = [(s + x) * L for s, x, L in zip(stress, extra, length)]
+    steer = [(detour_per_m + penalty[u]) * L for u, L in zip(uid, length)]
+    get = bound.get
+    left = [get(n, INF) for n in (head if forward else tail)]
+    if forbidden:
+        for u in forbidden:
+            for x in E.by_uid[u]:
+                left[x] = INF
+    if blocked_nodes:
+        far = head if forward else tail
+        for x in range(n):
+            if far[x] in blocked_nodes:
+                left[x] = INF
+    push, pop = heapq.heappush, heapq.heappop
+
     pops = 0
+    order = []
     while heap:
-        c, e = heapq.heappop(heap)
+        c, e = pop(heap)
         if done[e]:
             continue
         done[e] = 1
+        order.append(e)
         p = par[e]
         route_hash[e] = ((route_hash[p] if p >= 0 else 0) * 1000003 + e + 1) & 0xFFFFFFFFFFFFFFFF
         pops += 1
         if should_stop is not None and pops % 4096 == 0 and should_stop():
             break
 
-        L_e = length[e]
-        s_e = stress[e]
-        if forward:
-            node, back_node, nexts = head[e], tail[e], E.out[head[e]]
-        else:
-            node, back_node, nexts = tail[e], head[e], E.inc[tail[e]]
-        for e2 in nexts:
+        d_e = dist[e]
+        q_e = qual[e]
+        for e2, _w, turn in steps[e]:
             if done[e2]:
                 continue
-            if forbidden and uid[e2] in forbidden:
+            nd = d_e + length[e2]
+            if nd + left[e2] > max_len:
                 continue
-            if forward:
-                w = head[e2]
-                delta = _delta(b_in[e], b_out[e2])
-            else:
-                w = tail[e2]
-                delta = _delta(b_in[e2], b_out[e])
-            if w == back_node or (blocked_nodes and w in blocked_nodes):
-                continue
-            L2 = length[e2]
-            nd = dist[e] + L2
-            if nd + bound.get(w, INF) > max_len:
-                continue
-            s2 = stress[e2]
-            dq = (s2 + extra[e2]) * L2  # the crossing rule below looks at road stress only
-            if delta >= TURN_DEG:
+            dq = ride[e2]  # the crossing rule below looks at road stress only
+            if turn:
+                L_e = length[e]
+                s_e = stress[e]
                 crossing = False
-                if p >= 0 and L_e <= CROSSING_MAX_M and s_e > s2 and s_e > stress[p]:
+                if p >= 0 and L_e <= CROSSING_MAX_M and s_e > stress[e2] and s_e > stress[p]:
                     other = _delta(b_in[p], b_out[e]) if forward else _delta(b_in[e], b_out[p])
                     crossing = other >= TURN_DEG
                 if crossing:
@@ -676,15 +766,15 @@ def grow_tree(
                     dq -= full - min(full, CROSSING_CAP)
                 else:
                     dq += 1.0
-            nc = c + dq + (detour_per_m + penalty[uid[e2]]) * L2
+            nc = c + dq + steer[e2]
             if nc < cost[e2]:
                 cost[e2] = nc
                 dist[e2] = nd
-                qual[e2] = qual[e] + dq
+                qual[e2] = q_e + dq
                 par[e2] = e
-                heapq.heappush(heap, (nc, e2))
+                push(heap, (nc, e2))
 
-    return Tree(forward, cost, dist, qual, par, done, route_hash)
+    return Tree(forward, cost, dist, qual, par, done, route_hash, order)
 
 
 def score_walk(E: EdgeTable, walk: List[int], turn_upto: int):
@@ -738,6 +828,10 @@ def find_paths_tree(
     max_rounds: int = 20,
     defer_ratio: float = 1.5,
     triangles: bool = False,
+    anchors_per_round: int = ANCHORS_PER_ROUND,
+    stem_weight: float = 0.0,
+    lazy: bool = False,
+    pace: bool = False,
     policy: str = 'best',
     noise: float = 0.0,
     guided: bool = False,
@@ -749,7 +843,26 @@ def find_paths_tree(
     """Yields lollipop routes as GeoJSON Features (same shape as find_paths).
 
     triangles: also build three-leg loops (start → anchor → cross leg → home)
-    from anchors spread by direction and distance, ANCHORS_PER_ROUND a round.
+    from anchors spread by direction and distance, anchors_per_round a round.
+
+    stem_weight: a route's score is multiplied by 1 + stem_weight x the
+    share of it that is not loop (the stem, ridden both ways), so of two
+    equally pleasant routes the fuller loop is sent first.
+
+    lazy: a candidate is only built (shaped, scored) when its rough score
+    times the novelty factor of its two tree routes (every LIKELY_STEP-th
+    road of them, read off the trees) reaches the front of the queue.
+    Without it every candidate is built to learn its real novelty before
+    the next route is sent, however many loops of the same area are ahead
+    of it.
+
+    pace: spend per round what the graph can afford. Regrowing costs a
+    tree per anchor plus two, each as large as the graph in reach, and a
+    dense city has good loops to spare without it. So with PACE_STATES
+    states (directed edges in reach) or fewer nothing changes; above, the
+    anchors per round shrink in proportion (at least PACE_MIN_ANCHORS) and
+    a deferral regrow waits until the round has sent one more route per
+    PACE_STATES states.
 
     policy 'best': one stream ordered by score, with deferral rounds.
     policy 'cover': an area pass first sends, best first, only loops adding
@@ -803,18 +916,23 @@ def find_paths_tree(
     noise_per_m = noise / MILE_M
     penalty = [0.0] * E.n_uid
     anchors: Optional[List[int]] = None
+    anchor_cursor = 0
+    per_round = anchors_per_round  # anchors a round, and routes a round must send
+    defer_after = 1                # before a deferral regrow (see `pace`)
+    cleared = set()  # lazy: candidates that passed `doomed`
     to_start = _node_dist(E, start_node, forward=False)
     from_start = _node_dist(E, start_node, forward=True)
 
     heap: list = []
     cands: list = []
+    rough: List[float] = []  # (turns + discomfort) per mile of each candidate before shaping
     seq = 0
     cover: Dict[tuple, int] = {}
     cover_ver = 0
     seen_paths = set()
     judged = set()
     stats = {'validated': 0, 'bad_shape': 0, 'stem': 0, 'one_way': 0, 'near_dup': 0,
-             'three_leg_sent': 0, 'missed_pin': 0, 'forbidden': 0, 'unpaved': 0}
+             'three_leg_sent': 0, 'missed_pin': 0, 'forbidden': 0, 'unpaved': 0, 'doomed': 0}
     timing = {'rounds_s': 0.0, 'shape_s': 0.0, 'elev_s': 0.0}
     centroids: list = [tuple(c) for c in (known_centroids or []) if c]
     yielded = 0
@@ -888,32 +1006,32 @@ def find_paths_tree(
                     junctions.add(E.tail[x])
                     junctions.add(E.head[x])
         found = []
+        at = E.steps()[2]
+        t_done, t_dist, t_qual = T.done, T.dist, T.qual
+        b_done, b_dist, b_qual = B.done, B.dist, B.qual
+        uid = E.uid
+        least = base + min_leg
         for v in junctions:
             if anchor_b is not None and (
                     v == start_node
                     or _delta(anchor_b, E.bearing_from(start_node, v)) < TRI_MIN_SPREAD):
                 continue
-            ins = [e for e in E.inc[v] if T.done[e] and T.dist[e] - base >= min_leg]
-            if not ins:
-                continue
-            outs = [g for g in E.out[v] if B.done[g]]
             pairs = []
-            for e in ins:
-                de, qe, te = T.dist[e], T.qual[e], E.tail[e]
-                bi = E.b_in[e]
-                e_hit = only_uids is None or E.uid[e] in only_uids
-                for g in outs:
-                    if E.head[g] == te:
-                        continue
-                    if not e_hit and E.uid[g] not in only_uids:
-                        continue
-                    total = de + B.dist[g]
-                    if total < min_path_length or total > max_path_length:
-                        continue
-                    q = qe + B.qual[g]
-                    if _delta(bi, E.b_out[g]) >= TURN_DEG:
-                        q += 1.0
-                    pairs.append((q / (total / MILE_M), e, g))
+            for e, g, turn in at[v]:
+                if not t_done[e] or not b_done[g]:
+                    continue
+                de = t_dist[e]
+                if de < least:
+                    continue
+                if only_uids is not None and uid[e] not in only_uids and uid[g] not in only_uids:
+                    continue
+                total = de + b_dist[g]
+                if total < min_path_length or total > max_path_length:
+                    continue
+                q = t_qual[e] + b_qual[g]
+                if turn:
+                    q += 1.0
+                pairs.append((q / (total / MILE_M), e, g))
             if not pairs:
                 continue
             # Pairs at one junction mostly trace the same loop; keep the best
@@ -936,6 +1054,7 @@ def find_paths_tree(
                 continue
             judged.add(key)
             cands.append((prefix, T, e, B, g, key))
+            rough.append(qpm)
             heapq.heappush(heap, (qpm, seq, len(cands) - 1, -1))
             seq += 1
             added += 1
@@ -1013,7 +1132,7 @@ def find_paths_tree(
         return pair_up(grow_leg(prefix, pen), B, prefix, leg_min())
 
     def _add_round():
-        nonlocal rounds, batch_rounds, yielded_at_round, anchors
+        nonlocal rounds, batch_rounds, yielded_at_round, anchors, per_round, defer_after, anchor_cursor
         rounds += 1
         batch_rounds += 1
         yielded_at_round = yielded
@@ -1025,13 +1144,21 @@ def find_paths_tree(
         B = grow(start_node, False, from_start, pen)
         added = pair_up(F, B, None, 0.0)
         tri = 0
+        if pace and rounds == 1:
+            load = len(F.order) / PACE_STATES
+            if load > 1.0:
+                per_round = max(PACE_MIN_ANCHORS, int(round(anchors_per_round / load)))
+                defer_after = 1 + int(load)
+                print(f"[{tag}] {len(F.order)} states in reach: {per_round} anchors a round, "
+                      f"deferral after {defer_after} routes")
         if triangles:
             if anchors is None:
                 anchors = pick_anchors(F)
-            for j in range(ANCHORS_PER_ROUND):
+            for j in range(per_round):
                 if not anchors or stopped():
                     break
-                A = anchors[((rounds - 1) * ANCHORS_PER_ROUND + j) % len(anchors)]
+                A = anchors[anchor_cursor % len(anchors)]
+                anchor_cursor += 1
                 tri += cross_leg(F, B, A, pen)
         print(f"[{tag}] round {rounds}: +{added} pair +{tri} three-leg candidates, heap={len(heap)}")
 
@@ -1233,6 +1360,7 @@ def find_paths_tree(
         to unjudged so a later request can find them again."""
         nonlocal require, via, forbidden, batch, batch_rounds, best_qpm, dry, in_request, continuing
         nonlocal guided_orders, guided_cursor, guided_detour, heap, held, yielded_at_request, unpaved_at_request
+        cleared.clear()
         yielded_at_request = yielded
         unpaved_at_request = stats['unpaved']
         for _s, _q, idx, _v in heap + held:
@@ -1263,13 +1391,123 @@ def find_paths_tree(
         held = []
         info.clear()
         cands.clear()
+        rough.clear()
         refresh()
         print(f"[{tag}] request batch {batch}: {len(require)} required, "
               f"{len(forbidden)} forbidden edges")
 
+    def touches(T, prefix=None):
+        """Per state of T: its route passes a junction twice, or (a leg
+        tree) comes back to a junction of the route it continues. The
+        lollipop then closes before the return route starts."""
+        if T.touch is None:
+            on = {start_node}
+            if prefix is not None:
+                F, eA = prefix[-1]
+                for x in F.chain(eA):
+                    on.add(E.tail[x])
+            enter, leave = T.span()
+            par, head, inc, done = T.par, E.head, E.inc, T.done
+            flag = bytearray(E.n)
+            for e in T.order:
+                p = par[e]
+                n = head[e]
+                if (p >= 0 and flag[p]) or n in on:
+                    flag[e] = 1
+                    continue
+                at = enter[e]
+                for y in inc[n]:
+                    if y != e and done[y] and enter[y] <= at < leave[y]:
+                        flag[e] = 1
+                        break
+            T.touch = flag
+        return T.touch
+
+    def doomed(idx):
+        """Cheap test before building a walk: follow the return route home
+        until it touches the outbound route. That junction ends the stem,
+        and the lengths of stem and loop follow from the trees, so most
+        out-and-backs are dropped here. Only what _shape would refuse too is
+        refused: a stem with a one-way road returns another way (the
+        return tree's own route, or round each one-way edge), so its way
+        back is only bounded from below and "too short" is left to _shape.
+        So are guided chains of legs and routes that pass a junction twice
+        before the return route starts.
+        """
+        prefix, T, e, B, g, _key = cands[idx]
+        F = eA = None
+        if touches(T, prefix)[e] if prefix is None or len(prefix) == 1 else True:
+            return False
+        if prefix is not None:
+            if in_request:
+                return False
+            F, eA = prefix[0]
+            f_enter, f_leave = F.span()
+            f_at, f_done = f_enter[eA], F.done
+        enter, leave = T.span()
+        at = enter[e]
+        inc, head, done, par = E.inc, E.head, T.done, B.par
+        x = g
+        stem = 0.0
+        longer = False  # the stem has a one-way road: the way back is another road
+        while x >= 0:
+            n = head[x]
+            if n == start_node:
+                break
+            hit = False
+            for y in inc[n]:
+                if done[y] and enter[y] <= at < leave[y]:
+                    stem = T.dist[y]
+                    longer = bool(T.one_way(E.rev)[y]) or (F is not None and bool(F.one_way(E.rev)[eA]))
+                    hit = True
+                    break
+                if F is not None and f_done[y] and f_enter[y] <= f_at < f_leave[y]:
+                    stem = F.dist[y]
+                    longer = bool(F.one_way(E.rev)[y])
+                    hit = True
+                    break
+            if hit:
+                break
+            x = par[x]
+        if x < 0:
+            return False
+        loop = T.dist[e] - stem + B.dist[g] - B.dist[x] + E.length[x]
+        back = stem
+        if longer:
+            back = 0.5 * min(stem, B.dist[x] - E.length[x])
+        total = loop + stem + back
+        slack = 1e-6 * total  # the sums here add up in another order than _shape's
+        return (loop < min_loop_length - slack or loop < loop_ratio_floor * total - slack
+                or total > max_path_length + slack
+                or (not longer and total < min_path_length - slack))
+
+    def likely_novelty(idx):
+        """Novelty of a candidate's tree routes as the cover stands, from
+        every LIKELY_STEP-th road along them (no walk is built)."""
+        prefix, T, e, B, g, _key = cands[idx]
+        uid, cells, get = E.uid, E.cells, cover.get
+        tot, cnt, i = 0.0, 0, 0
+        legs = [(T, e), (B, g)]
+        if prefix is not None:
+            legs.extend(prefix)
+        for tree, x in legs:
+            par = tree.par
+            while x >= 0:
+                if i % LIKELY_STEP == 0:
+                    for c in cells[uid[x]]:
+                        tot += 1.0 / (1 + get(c, 0))
+                        cnt += 1
+                i += 1
+                x = par[x]
+        return tot / cnt if cnt else 1.0
+
     def validate(idx):
         stats['validated'] += 1
         t0 = time.perf_counter()
+        if idx not in cleared and doomed(idx):
+            stats['doomed'] += 1
+            timing['shape_s'] += time.perf_counter() - t0
+            return None
         item = _shape(idx)
         timing['shape_s'] += time.perf_counter() - t0
         if item is None:
@@ -1385,7 +1623,8 @@ def find_paths_tree(
             'total': total, 'loop_dist': loop_dist, 'ratio': loop_dist / total,
             'turns': one_way_turns, 'discomfort': disc,
             # surface preference ranks too: its cost, and for Prefer gravel the unpaved share
-            'qpm': (all_turns + disc + surf) / (total / MILE_M) * math.exp(-gravel_rank * unpaved_m / total),
+            'qpm': ((all_turns + disc + surf) / (total / MILE_M) * math.exp(-gravel_rank * unpaved_m / total)
+                    * (1.0 + stem_weight * (1.0 - loop_dist / total))),
             'three_leg': prefix is not None,
         }
 
@@ -1458,10 +1697,23 @@ def find_paths_tree(
                 score, _s, idx, ver = heapq.heappop(heap)
                 item = info.get(idx)
                 if item is None:
+                    if lazy and cover and ver != cover_ver and not in_request and not covering:
+                        if idx not in cleared:
+                            if doomed(idx):
+                                stats['validated'] += 1
+                                stats['doomed'] += 1
+                                continue
+                            cleared.add(idx)
+                        likely = rough[idx] * (1.0 + explore_weight * (1.0 - likely_novelty(idx)))
+                        if heap and likely > heap[0][0] + 1e-9:
+                            heapq.heappush(heap, (likely, seq, idx, cover_ver))
+                            seq += 1
+                            continue
                     item = validate(idx)
                     if item is None:
                         continue
                     info[idx] = item
+                    ver = -1  # its real score replaces the likely one below
                 final = score
                 if covering and not in_request:
                     cells = item['cells']
@@ -1478,7 +1730,7 @@ def find_paths_tree(
                         seq += 1
                         continue
                 if ((policy == 'best' or in_request) and best_qpm is not None and can_round()
-                        and yielded > yielded_at_round
+                        and yielded - yielded_at_round >= (1 if in_request else defer_after)
                         and final > (GUIDE_DEFER_RATIO if in_request else defer_ratio) * best_qpm):
                     heapq.heappush(heap, (final, seq, idx, cover_ver))
                     seq += 1

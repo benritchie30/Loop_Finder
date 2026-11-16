@@ -12,11 +12,14 @@ query bumps FILTER_VERSION, so every tile is fetched again into a new folder.
 
 Downloading: a public Overpass server costs tens of seconds per request
 almost regardless of size, and gives each user only a couple of query slots.
-So one worker thread downloads every wanted tile that is missing in a single
-request (up to MAX_BATCH tiles: one bbox clause per tile, results split into
-tiles here), one request at a time, generation requests before prefetches,
-nearest first. On 429 it asks the server's /status when a slot frees; on
-502/503/504 or a timeout it moves to the next server in OVERPASS_URL.
+So the wanted tiles that are missing are shared out over every free query slot
+of every server in OVERPASS_URL (SLOTS requests at a time per server, up to
+MAX_BATCH tiles per request: one bbox clause per tile, results split into tiles
+here), generation requests before prefetches, nearest first. A request a server
+has not started answering after HEDGE_AFTER seconds is sent to another server
+too, and whichever answers first wins. A server that fails rests for a while
+(on 429, until its /status says a slot frees) and its tiles go to the others;
+a tile gives up after ATTEMPTS failed requests.
 A prefetch (a dropped pin) can be cancelled, even mid-download, until a
 generation waits for the same tiles.
 """
@@ -49,12 +52,24 @@ DEFAULT_OVERPASS = ('https://overpass-api.de/api/interpreter,'
 # public server; the placeholder makes the server warn at start.
 CONTACT_PLACEHOLDER = 'contact@example.com'
 CONTACT = (os.environ.get('LOOP_CONTACT') or CONTACT_PLACEHOLDER).strip()
-USER_AGENT = f'loop-finder/0.1 (bike loop generator; {CONTACT})'
+
+
+def user_agent(contact: str = CONTACT) -> str:
+    """The placeholder address is left out: overpass-api.de answers it with 406."""
+    if not contact or contact == CONTACT_PLACEHOLDER:
+        return 'loop-finder/0.1 (bike loop generator)'
+    return f'loop-finder/0.1 (bike loop generator; {contact})'
+
+
+USER_AGENT = user_agent()
 MAX_BATCH = 16  # tiles per request (~0.4 x 0.4 deg; Charlotte that size is ~45 MB, ~1 min)
-ATTEMPTS = 5
-# Seconds to wait between rounds through the server list (LOOP_MAP_RETRY_WAITS for tests).
+SLOTS = env_number('LOOP_MAP_SLOTS', 2, lo=1)  # requests at a time per server (overpass-api.de allows 2)
+HEDGE_AFTER = 20.0  # seconds without a first byte before another server is asked too
+ATTEMPTS = 5  # failed requests before a tile gives up
+# Seconds a server rests after its 1st, 2nd, ... failure in a row (LOOP_MAP_RETRY_WAITS for tests).
 RETRY_WAITS = tuple(float(x) for x in (os.environ.get('LOOP_MAP_RETRY_WAITS') or '5,15,30').split(','))
 MAX_SLOT_WAIT = 90.0  # longest wait for a rate-limit slot before trying again anyway
+REFUSED_WAIT = 300.0  # rest after an answer that will not change soon (400, 403, 406, ...)
 QUERY_TIMEOUT = 300  # seconds Overpass may spend on a query
 READ_CHUNK = 1 << 16
 
@@ -217,7 +232,7 @@ def split_by_tile(ways: List[list], tiles: Iterable[Tile]) -> Dict[Tile, List[li
 
 class _Want:
     """A tile someone is waiting for or prefetching."""
-    __slots__ = ('event', 'owners', 'holds', 'seq', 'error')
+    __slots__ = ('event', 'owners', 'holds', 'seq', 'error', 'fails')
 
     def __init__(self, seq):
         self.event = threading.Event()
@@ -225,28 +240,41 @@ class _Want:
         self.holds = 0  # ensure() callers that may not be cancelled
         self.seq = seq
         self.error: Optional[str] = None
+        self.fails = 0  # requests for this tile that failed
+
+
+class _Request:
+    """One Overpass request in flight."""
+    __slots__ = ('tiles', 'url', 'started', 'bytes', 'hedged')
+
+    def __init__(self, tiles, url, hedged):
+        self.tiles: List[Tile] = tiles
+        self.url = url
+        self.started = time.monotonic()
+        self.bytes = 0  # received so far
+        self.hedged = hedged  # it is, or has, a copy on another server
 
 
 class MapStore:
-    """Tiles on disk plus one download worker. Thread-safe; one per process."""
+    """Tiles on disk plus the download workers. Thread-safe; one per process."""
 
     def __init__(self, data_dir: Optional[str] = None,
                  fetch: Callable[..., dict] = overpass_fetch,
-                 sleep: Callable[[float], None] = time.sleep,
                  status: Callable[[str], Optional[float]] = slot_wait):
         self.dir = data_dir or default_dir()
         self.tile_dir = os.path.join(self.dir, f'tiles-v{FILTER_VERSION}')
         os.makedirs(self.tile_dir, exist_ok=True)
         self._fetch = fetch
-        self._sleep = sleep
         self._status = status
         self._lock = threading.Lock()
         self._work = threading.Condition(self._lock)
         self._wants: Dict[Tile, _Want] = {}
         self._seq = 0
-        self._running: Set[Tile] = set()
-        self._bytes = 0  # received so far by the running request
-        self._worker: Optional[threading.Thread] = None
+        self._active: List[_Request] = []
+        self._done_bytes = 0  # received by the requests that ended since the workers were last idle
+        self._workers: List[threading.Thread] = []
+        self._rest: Dict[str, float] = {}  # server -> time.monotonic() it may be asked again
+        self._streak: Dict[str, int] = {}  # server -> failures in a row
         self._cache: Dict[Tile, List[list]] = {}  # recently read tiles
         self._cache_order: List[Tile] = []
         # Parsed tiles kept (a dense city tile is ~10 MB in memory). A build reads all of
@@ -348,10 +376,12 @@ class MapStore:
                 w.event.set()
                 del self._wants[tile]
                 return w
-            self._work.notify()
-            if self._worker is None or not self._worker.is_alive():
-                self._worker = threading.Thread(target=self._run, name='map-download', daemon=True)
-                self._worker.start()
+            self._work.notify_all()
+            self._workers = [t for t in self._workers if t.is_alive()]
+            for _ in range(len(overpass_urls()) * SLOTS - len(self._workers)):
+                t = threading.Thread(target=self._run, name='map-download', daemon=True)
+                self._workers.append(t)
+                t.start()
         return w
 
     def _drop_if_unwanted(self, tile: Tile):
@@ -360,120 +390,142 @@ class MapStore:
             del self._wants[tile]
             w.event.set()  # nobody waits; keeps the event consistent
 
-    # ---- worker ----
+    # ---- workers ----
 
-    def _next_batch(self) -> List[Tile]:
-        """Wanted, not running: generation holds first, then oldest request.
-        Requests list tiles nearest first, so the batch starts at the pin."""
-        todo = [(0 if w.holds > 0 else 1, w.seq, t) for t, w in self._wants.items() if t not in self._running]
-        todo.sort()
-        return [t for _h, _s, t in todo[:MAX_BATCH]]
+    def _next_job(self):
+        """(tiles, server, hedged) for a free query slot, or None. Lock held.
+        Tiles nobody is fetching come first: generation holds, then the oldest
+        request (requests list tiles nearest first, so work starts at the pin),
+        shared out evenly over the free slots. With none left, a request whose
+        server has sent nothing for HEDGE_AFTER seconds is copied to another."""
+        urls = overpass_urls()
+        now = time.monotonic()
+        load = {u: 0 for u in urls}
+        for r in self._active:
+            if r.url in load:
+                load[r.url] += 1
+        free = [u for u in urls if load[u] < SLOTS and self._rest.get(u, 0.0) <= now]
+        if not free:
+            return None
+        running = {t for r in self._active for t in r.tiles}
+        todo = sorted((0 if w.holds > 0 else 1, w.seq, t) for t, w in self._wants.items() if t not in running)
+        if todo:
+            slots = sum(SLOTS - load[u] for u in free)
+            size = min(MAX_BATCH, -(-len(todo) // slots))
+            return [t for _h, _s, t in todo[:size]], min(free, key=load.get), False
+        for r in self._active:
+            if r.hedged or r.bytes or now - r.started < HEDGE_AFTER:
+                continue
+            others = [u for u in free if u != r.url]
+            tiles = [t for t in r.tiles if t in self._wants]
+            if others and tiles:
+                r.hedged = True
+                return tiles, min(others, key=load.get), True
+        return None
 
     def _run(self):
         while True:
             with self._lock:
-                batch = self._next_batch()
-                while not batch:
-                    self._work.wait(timeout=30)
-                    batch = self._next_batch()
-                self._running = set(batch)
-                self._bytes = 0
-            error = None
+                job = self._next_job()
+                while job is None:
+                    # With tiles wanted, look again soon: a server's rest ends, a request turns slow.
+                    self._work.wait(timeout=1.0 if self._wants else 30.0)
+                    job = self._next_job()
+                tiles, url, hedged = job
+                if not self._active:
+                    self._done_bytes = 0
+                req = _Request(tiles, url, hedged)
+                self._active.append(req)
+            host = urllib.parse.urlparse(url).netloc
+            if hedged:
+                print(f'[map] no answer yet for {len(tiles)} tiles; asking {host} too')
+            failure = None  # (message, kind, seconds the server rests)
+            ok = False
             try:
-                self._download(batch)
+                self._download(req)
+                ok = True
             except Cancelled:
-                print(f'[map] download of {len(batch)} tiles cancelled (pin moved)')
-            except MapError as exc:
-                error = str(exc)
-            except Exception as exc:  # never let the worker die
-                error = f'Map download failed: {exc}'
+                print(f'[map] download of {len(tiles)} tiles from {host} dropped (no longer wanted)')
+            except Exception as exc:  # never let a worker die
+                failure = self._failure(exc, url)
+                print(f'[map] {failure[0]}; {host} rests {failure[2]:.0f}s')
             with self._lock:
-                for t in batch:
+                self._active.remove(req)
+                self._done_bytes += req.bytes
+                if ok:
+                    self._streak[url] = 0
+                elif failure:
+                    self._streak[url] = self._streak.get(url, 0) + 1
+                    self._rest[url] = time.monotonic() + failure[2]
+                elsewhere = {t for r in self._active for t in r.tiles}
+                for t in tiles:
                     w = self._wants.get(t)
                     if w is None:
                         continue
                     if self.has(t):
                         del self._wants[t]
                         w.event.set()
-                    elif error:
-                        w.error = error
-                        del self._wants[t]
-                        w.event.set()
-                self._running = set()
+                    elif failure:
+                        w.fails += 1
+                        if w.fails >= ATTEMPTS and t not in elsewhere:
+                            w.error = self._error_text(failure)
+                            del self._wants[t]
+                            w.event.set()
+                self._work.notify_all()
 
     def _still_wanted(self, batch) -> bool:
         with self._lock:
             return any(t in self._wants for t in batch)
 
-    def _download(self, batch: List[Tile]):
-        query = overpass_query(batch)
-        urls = overpass_urls()
-        last, kind = None, 'network'
+    def _download(self, req: _Request):
+        """One request for req.tiles; writes the tiles. Raises what the fetch raises."""
+        host = urllib.parse.urlparse(req.url).netloc
 
         def cancelled():
-            return not self._still_wanted(batch)
+            return not self._still_wanted(req.tiles)
 
         def on_bytes(n):
-            self._bytes = n
+            req.bytes = n
 
-        for attempt in range(ATTEMPTS):
-            url = urls[attempt % len(urls)]
-            host = urllib.parse.urlparse(url).netloc
-            if cancelled():
-                raise Cancelled()
-            try:
-                t0 = time.time()
-                self.requests += 1
-                data = self._fetch(query, url, on_bytes=on_bytes, cancelled=cancelled)
-                ways = compact_ways(data)
-                per_tile = split_by_tile(ways, batch)
-                for tile, tile_ways in per_tile.items():
-                    self._write(tile, tile_ways)
-                print(f'[map] {len(batch)} tiles, {len(ways)} ways, {self._bytes / 1e6:.1f} MB '
-                      f'from {host} in {time.time() - t0:.1f}s')
-                return
-            except Cancelled:
-                raise
-            except urllib.error.HTTPError as exc:
-                last = f'HTTP {exc.code} from {host}'
-                if exc.code == 429:
-                    kind = 'busy'
-                    wait = self._status(url)
-                    wait = 10.0 if wait is None else min(MAX_SLOT_WAIT, wait + 1.0)
-                    print(f'[map] {host} rate limit; its next slot is in {wait:.0f}s')
-                    self._wait(wait, cancelled)
-                    continue
-                kind = 'busy' if exc.code in (502, 503, 504) else 'server'
-                if exc.code not in (500, 502, 503, 504):
-                    break
-            except ValueError as exc:  # bad JSON or an Overpass runtime error (timeout, memory)
-                last = f'{exc} ({host})'
-                kind = 'server'
-            except (urllib.error.URLError, TimeoutError, OSError) as exc:
-                last = f'{type(exc).__name__} from {host}: {getattr(exc, "reason", exc)}'
-                kind = 'network'
-            # Next server right away; after a full round through the list, wait.
-            if (attempt + 1) % len(urls) == 0 and attempt + 1 < ATTEMPTS:
-                wait = RETRY_WAITS[min(attempt // len(urls), len(RETRY_WAITS) - 1)]
-                print(f'[map] {last}; trying again in {wait:.0f}s')
-                self._wait(wait, cancelled)
-            else:
-                print(f'[map] {last}; trying the next server')
+        if cancelled():
+            raise Cancelled()
+        t0 = time.time()
+        with self._lock:
+            self.requests += 1
+        data = self._fetch(overpass_query(req.tiles), req.url, on_bytes=on_bytes, cancelled=cancelled)
+        ways = compact_ways(data)
+        for tile, tile_ways in split_by_tile(ways, req.tiles).items():
+            if not self.has(tile):  # a copy of this request on another server may have won
+                self._write(tile, tile_ways)
+        print(f'[map] {len(req.tiles)} tiles, {len(ways)} ways, {req.bytes / 1e6:.1f} MB '
+              f'from {host} in {time.time() - t0:.1f}s')
+
+    def _failure(self, exc: Exception, url: str):
+        """(message, kind, seconds the server rests) for a failed request."""
+        host = urllib.parse.urlparse(url).netloc
+        retry = RETRY_WAITS[min(self._streak.get(url, 0), len(RETRY_WAITS) - 1)]
+        if isinstance(exc, urllib.error.HTTPError):
+            message = f'HTTP {exc.code} from {host}'
+            if exc.code == 429:
+                wait = self._status(url)
+                return message, 'busy', 10.0 if wait is None else min(MAX_SLOT_WAIT, wait + 1.0)
+            if exc.code in (502, 503, 504):
+                return message, 'busy', retry
+            return message, 'server', retry if exc.code == 500 else REFUSED_WAIT
+        if isinstance(exc, ValueError):  # bad JSON or an Overpass runtime error (timeout, memory)
+            return f'{exc} ({host})', 'server', retry
+        if isinstance(exc, (urllib.error.URLError, TimeoutError, OSError)):
+            return f'{type(exc).__name__} from {host}: {getattr(exc, "reason", exc)}', 'network', retry
+        return f'Map download failed: {exc} ({host})', 'server', retry
+
+    @staticmethod
+    def _error_text(failure) -> str:
         advice = {
             'busy': 'The map server is busy; try again in a minute.',
             'server': 'The map server returned an error; try again later.',
             'network': 'Check the internet connection and try again.',
-        }[kind]
-        raise MapError(f'Could not download map data ({last}). {advice}')
-
-    def _wait(self, seconds, cancelled):
-        left = seconds
-        while left > 0:
-            if cancelled():
-                raise Cancelled()
-            step = min(0.5, left)
-            self._sleep(step)
-            left -= step
+        }[failure[1]]
+        return f'Could not download map data ({failure[0]}). {advice}'
 
     # ---- public ----
 
@@ -505,7 +557,8 @@ class MapStore:
         return dropped
 
     def progress_mb(self) -> float:
-        return round(self._bytes / 1e6, 1)
+        """MB received by the requests running now and those just ended."""
+        return round((self._done_bytes + sum(r.bytes for r in list(self._active))) / 1e6, 1)
 
     def ensure(self, tiles: List[Tile],
                progress: Optional[Callable[[int, int, float], None]] = None,
