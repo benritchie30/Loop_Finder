@@ -8,53 +8,20 @@ import { FILTER_METRICS, getFilterMetric } from '../../utils/pathFiltering';
 import { PINNED_FILTERS, SORT_OPTIONS } from '../../hooks/usePathSets';
 import { ROAD_PREFERENCES } from '../../utils/roadWeights';
 import { SURFACE_PREFERENCES, surfacePreference } from '../../utils/surface';
-import { describeSelections } from '../../utils/routeSelections';
+import { roadsLabel, settingsRows } from '../../utils/generationSettings';
+import ComparePanel from './ComparePanel';
 import {
     displayToMiles,
     distanceUnit,
-    formatDistance,
     lengthSliderRange,
     roundLength,
     useUnits,
 } from '../../utils/units';
 import './GenerationPanel.css';
 
-function roadsLabel(settings) {
-    if (settings.road_preference === 'custom') return 'custom road weights';
-    const p = ROAD_PREFERENCES.find((x) => x.id === (settings.road_preference || 'balanced'));
-    return `${(p?.label || 'Balanced').toLowerCase()} roads`;
-}
-
 function roadsShort(preference) {
     if (preference === 'custom') return 'Custom';
     return ROAD_PREFERENCES.find((x) => x.id === (preference || 'balanced'))?.label || 'Balanced';
-}
-
-/** Surface for the summaries: its label, e.g. "Prefer gravel". */
-function surfaceLabel(preference) {
-    return SURFACE_PREFERENCES.find((p) => p.id === surfacePreference(preference)).label;
-}
-
-function settingsRows(generation, units) {
-    const s = generation.settings || {};
-    const opt = (v, d) => (v == null || v === '' ? `default (${d})` : String(v));
-    const rows = [
-        ['Route length', `${formatDistance(s.min_path_len, units, 0)} – ${formatDistance(s.max_path_len, units, 0)}`],
-        ['Search area', s.boundary?.shapes?.length ? `boundary “${s.boundary.name || 'custom'}”` : 'automatic (within reach)'],
-        ['Roads', roadsLabel(s)],
-        ['Surface', surfaceLabel(s.surface_preference)],
-        ['Loop share', s.loop_ratio == null ? '—' : `at least ${Math.round(Number(s.loop_ratio) * 100)}%`],
-        ['Soften busy roads (rural)', s.rural_scale === false ? 'off' : 'on'],
-        ['Explore / detour / reuse', `${opt(s.explore_weight, 2)} / ${opt(s.detour_weight, 0.3)} / ${opt(s.reuse_weight, 1)}`],
-        ['Same route within', `${s.min_dist_m ?? 50} m`],
-    ];
-    if (s.algorithm && s.algorithm !== 'tree_guided') rows.push(['Search', s.algorithm]);
-    if (generation.markerPosition) {
-        rows.push(['Start', `${generation.markerPosition.lat.toFixed(4)}, ${generation.markerPosition.lng.toFixed(4)}`]);
-    }
-    const painted = describeSelections(generation.selections || []);
-    if (painted) rows.push(['Roads and areas', painted]);
-    return rows;
 }
 
 const LIST_EDGE_PX = 14; // the list fades its cards out this close to its edges
@@ -148,6 +115,8 @@ function GenerationPanel({
     favoritesOnly = false,
     onFavoritesOnly, // (on)
     favoriteCount = 0, // favorite routes in this generation
+    compareProps = null, // dev (LOOP_DEV=1): { candidates, compare, onStart, onView, onSwap, onEnd }
+    compareGroupOf = null, // (route) => 'a' | 'b' | 'shared' | null, comparing
 }) {
     const units = useUnits();
     const settings = generation.settings || {};
@@ -294,9 +263,18 @@ function GenerationPanel({
         else setDraftName(generation.name);
     };
 
+    const compare = compareProps?.compare || null;
     let empty = null;
     if (paths.length === 0) {
-        if (favoritesOnly) {
+        if (compare && compare.view !== 'all' && compare.counts.all > 0) {
+            const label = { a: 'only in A', b: 'only in B', shared: 'in both A and B' }[compare.view];
+            empty = (
+                <div className="gen-empty">
+                    <span>No routes {label}{compare.counts.all !== compare.totals.all ? ' match your filters' : ''}.</span>
+                    <button type="button" className="link-btn" onClick={() => compareProps.onView('all')}>Show all</button>
+                </div>
+            );
+        } else if (favoritesOnly) {
             empty = (
                 <div className="gen-empty">
                     <span>
@@ -396,6 +374,8 @@ function GenerationPanel({
                     ))}
                 </div>
             )}
+
+            {compareProps && <ComparePanel generation={generation} {...compareProps} />}
 
             <div className="panel-section">
                 <ToolsBar {...toolsProps} mode="display" />
@@ -534,6 +514,7 @@ function GenerationPanel({
                             favorite={!!isFavorite && isFavorite(path)}
                             onToggleFavorite={onToggleFavorite}
                             onDownloadGpx={onDownloadGpx}
+                            group={compareGroupOf ? compareGroupOf(path) : null}
                         />
                     ))}
                     {empty}

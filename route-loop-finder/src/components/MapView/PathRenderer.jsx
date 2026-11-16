@@ -2,6 +2,7 @@ import { GeoJSON, CircleMarker, Polyline } from 'react-leaflet';
 import { useMemo } from 'react';
 import DirectionArrows from './DirectionArrows';
 import { surfacePieces } from '../../utils/surface';
+import { COMPARE_HUES } from '../../utils/compareSets';
 
 /**
  * The bold route with its unpaved stretches dashed: paved pieces as the
@@ -43,6 +44,8 @@ function SurfaceLine({ pieces, style, pane }) {
  *   look like every other route.
  * - The bold route's unpaved stretches are dashed (SurfaceLine); faint
  *   routes stay plain.
+ * - Dev compare (groupOf): every route in its group's colour (A only, B
+ *   only, shared), faint or bold; the group colour wins over the favorite one.
  *
  * Render order ensures the shown path is always visible above others.
  */
@@ -59,6 +62,7 @@ function PathRenderer({
     hoveredPathId = null, // a route card under the pointer: shown instead of the active path
     isFavorite = null, // (route) => boolean
     favoriteHue = 35,
+    groupOf = null, // dev compare: (route) => 'a' | 'b' | 'shared' | null
 }) {
     const hoveredPath = hoveredPathId && hoveredPathId !== currentPath?.id
         ? filteredPaths?.find((p) => p.id === hoveredPathId) || null
@@ -88,6 +92,23 @@ function PathRenderer({
     const favHoverStyle = useMemo(() => ({ ...hoverStyle, color: `hsl(${favoriteHue}, 85%, 50%)` }), [hoverStyle, favoriteHue]);
     const favActiveStyle = useMemo(() => ({ ...activeStyle, color: `hsl(${favoriteHue}, 80%, 42%)`, opacity: 0.95 }), [activeStyle, favoriteHue]);
 
+    // Dev compare: faint, bold and hover styles per group.
+    const groupStyles = useMemo(() => {
+        const out = {};
+        Object.entries(COMPARE_HUES).forEach(([group, h]) => {
+            out[group] = {
+                inactive: { weight: 2.5, color: `hsl(${h}, 75%, 50%)`, opacity: Math.max(pathPreviewOpacity, 0.55) },
+                active: { weight: 4, color: `hsl(${h}, 75%, 35%)`, opacity: 0.95 },
+                hover: { weight: 5, color: `hsl(${h}, 85%, 50%)`, opacity: 0.95 },
+            };
+        });
+        return out;
+    }, [pathPreviewOpacity]);
+    const groupStyle = (path, kind) => {
+        const group = groupOf && path ? groupOf(path) : null;
+        return group ? groupStyles[group][kind] : null;
+    };
+
     // Derived colors for elements
     // Secondary color: Brighter/Lighter/More saturated for better visibility against dark path
     const secondaryColor = `hsl(${primaryColor}, 85%, 60%)`;
@@ -100,9 +121,10 @@ function PathRenderer({
     const getPathKey = (path, index, prefix) => `${prefix}-${path?.id ?? 'route'}-${index}`;
 
     const shownPieces = useMemo(() => surfacePieces(shownPath), [shownPath]);
-    const shownStyle = hoveredPath
+    const shownStyle = groupStyle(shownPath, hoveredPath ? 'hover' : 'active') || (hoveredPath
         ? (favorite(shownPath) ? favHoverStyle : hoverStyle)
-        : (favorite(shownPath) ? favActiveStyle : activeStyle);
+        : (favorite(shownPath) ? favActiveStyle : activeStyle));
+    const shownGroup = groupOf && shownPath ? groupOf(shownPath) || '' : '';
 
     return (
         <>
@@ -113,9 +135,9 @@ function PathRenderer({
 
                 return (
                     <GeoJSON
-                        key={getPathKey(path, index, 'inactive')}
+                        key={getPathKey(path, index, `inactive${groupOf ? `-${groupOf(path)}` : ''}`)}
                         data={path}
-                        style={inactiveStyle}
+                        style={groupStyle(path, 'inactive') || inactiveStyle}
                         pane={backgroundPane}
                         interactive={false}
                     />
@@ -125,7 +147,7 @@ function PathRenderer({
             {/* The shown path: a route card's preview, else the active path (unpaved stretches dashed) */}
             {shownPath && shownPieces && (
                 <SurfaceLine
-                    key={getPathKey(shownPath, 0, `surface-${hoveredPath ? 'hover' : 'active'}${favorite(shownPath) ? '-fav' : ''}`)}
+                    key={getPathKey(shownPath, 0, `surface-${hoveredPath ? 'hover' : 'active'}${favorite(shownPath) ? '-fav' : ''}${shownGroup}`)}
                     pieces={shownPieces}
                     style={shownStyle}
                     pane={activePane}
@@ -133,7 +155,7 @@ function PathRenderer({
             )}
             {shownPath && !shownPieces && (
                 <GeoJSON
-                    key={getPathKey(shownPath, 0, `${hoveredPath ? 'hover' : 'active'}${favorite(shownPath) ? '-fav' : ''}`)}
+                    key={getPathKey(shownPath, 0, `${hoveredPath ? 'hover' : 'active'}${favorite(shownPath) ? '-fav' : ''}${shownGroup}`)}
                     data={shownPath}
                     style={shownStyle}
                     pane={activePane}

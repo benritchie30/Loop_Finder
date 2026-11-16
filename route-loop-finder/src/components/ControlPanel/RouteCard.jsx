@@ -4,6 +4,7 @@ import Sparkline from './Sparkline';
 import { formatClimbRate, formatClimb, formatDistance, useUnits } from '../../utils/units';
 import { formatUnpaved } from '../../utils/pathFiltering';
 import { unpavedShare } from '../../utils/surface';
+import { COMPARE_HUES, GROUP_BADGE } from '../../utils/compareSets';
 
 /** The selected card's details: what the card row does not already say, and its GPX download. */
 function Details({ p, units, onDownloadGpx }) {
@@ -54,6 +55,7 @@ function Details({ p, units, onDownloadGpx }) {
  */
 const RouteCard = forwardRef(function RouteCard({
     path, number, selected, onSelect, onHover, favorite = false, onToggleFavorite, onDownloadGpx,
+    group = null, // dev compare: 'a' | 'b' | 'shared'
 }, ref) {
     const units = useUnits();
     const p = path.properties || {};
@@ -65,6 +67,8 @@ const RouteCard = forwardRef(function RouteCard({
             tabIndex={-1}
             className={`route-card ${selected ? 'is-selected' : ''} ${favorite ? 'is-favorite' : ''}`}
             data-route-id={path.id}
+            data-group={group || undefined}
+            style={group ? { '--group-hue': COMPARE_HUES[group] } : undefined}
             onClick={() => onSelect(path.id)}
             onMouseMove={(e) => onHover?.(path.id, e)}
         >
@@ -74,6 +78,11 @@ const RouteCard = forwardRef(function RouteCard({
                     <strong>{formatDistance(p.total_miles, units)}</strong>
                     <span className="route-card__climb">↗ {formatClimb(p.total_climb_ft, units)}</span>
                 </span>
+                {group && (
+                    <span className="route-card__group" title={{ a: 'Only in A', b: 'Only in B', shared: 'In both A and B' }[group]}>
+                        {GROUP_BADGE[group]}
+                    </span>
+                )}
                 <Sparkline profile={p.elevation_profile} />
                 {onToggleFavorite && (
                     <button

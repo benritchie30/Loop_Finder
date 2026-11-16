@@ -51,7 +51,7 @@ function selectionsPayload(selections) {
 
 const DEFAULT_ALGORITHM_OPTION = { id: 'tree_guided', label: 'Area sweep', resumable: true };
 // Every strategy the server has (dev ones only listed with LOOP_DEV=1).
-const AREA_SWEEP_IDS = ['tree_guided', 'tree_loops', 'tree_cover', 'tree_triangles', 'loop_atlas'];
+const AREA_SWEEP_IDS = ['tree_guided', 'tree_loops', 'tree_cover', 'tree_triangles', 'tree_triangles8', 'tree_full', 'loop_atlas'];
 // Saved settings of search options that were removed.
 const REMOVED_SETTINGS = ['sim_ceiling', 'deduplication', 'cap_k', 'debug_snapshots', 'snapshot_every'];
 // Route length the slider allows, in miles (up to the server's limit).
@@ -221,6 +221,12 @@ function App() {
     favoritesOnly,
     showFavoritesOnly,
     keepListed,
+    compare,
+    compareGroupOf,
+    startCompare,
+    setCompareView,
+    swapCompare,
+    endCompare,
   } = usePathSets({ favorites });
 
   const { mode, setMode, pendingMarker, setMarkerPosition, placeMarker, clearPendingMarker } = useAppMode();
@@ -272,6 +278,8 @@ function App() {
 
   // The server sends the real list (only Area sweep unless it runs with LOOP_DEV=1).
   const [algorithms, setAlgorithms] = useState([DEFAULT_ALGORITHM_OPTION]);
+  // The server runs with LOOP_DEV=1: dev tools (compare two generations) are shown.
+  const [devMode, setDevMode] = useState(false);
   const pickAlgorithm = useCallback(
     (id) => (algorithms.some((item) => item.id === id) ? id : algorithms[0].id),
     [algorithms],
@@ -499,6 +507,7 @@ function App() {
 
         case 'ALGORITHMS_LIST':
           if (Array.isArray(message.algorithms) && message.algorithms.length > 0) setAlgorithms(message.algorithms);
+          setDevMode(!!message.dev);
           break;
 
         case 'MAP_INFO':
@@ -639,6 +648,21 @@ function App() {
     () => (mode === 'input' && pendingMarker ? setsAtStart(generations, pendingMarker) : []),
     [mode, pendingMarker, generations],
   );
+  // Dev compare: the other generations from the open one's start, newest first.
+  const compareCandidates = useMemo(
+    () => (devMode && mode === 'display' && activeGeneration
+      ? setsAtStart(generations, activeGeneration.markerPosition).filter((g) => g.id !== activeGeneration.id)
+      : []),
+    [devMode, mode, activeGeneration, generations],
+  );
+  const compareProps = devMode && activeGeneration ? {
+    candidates: compareCandidates,
+    compare,
+    onStart: startCompare,
+    onView: setCompareView,
+    onSwap: swapCompare,
+    onEnd: endCompare,
+  } : null;
   const [startChoice, setStartChoice] = useState(null);
   const choiceForPin = startChoice && samePin(startChoice.pin, pendingMarker) ? startChoice : null;
   const addToId = choiceForPin
@@ -1252,6 +1276,7 @@ function App() {
           reachArea={reachArea}
           isExcludeMode={isExcludeMode}
           hoveredPathId={hoveredPathId}
+          compareGroupOf={compare ? compareGroupOf : null}
           onSelectPath={selectPath}
           hoveredSetId={mode === 'input' ? hoveredSetId : null}
           centreOn={centreOn}
@@ -1327,6 +1352,8 @@ function App() {
             favoritesOnly,
             onFavoritesOnly: showFavoritesOnly,
             favoriteCount,
+            compareProps,
+            compareGroupOf: compare ? compareGroupOf : null,
           }}
           viewOptions={viewOptions}
           setViewOption={setViewOption}

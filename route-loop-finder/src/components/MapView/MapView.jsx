@@ -74,6 +74,7 @@ function MapView({
     onToggleEdges, // Road tool: (edges, { type, kind, label })
     onPinMove, // the start pin was dragged: ({ lat, lng })
     hoveredPathId = null, // route card under the pointer
+    compareGroupOf = null, // dev compare: (route) => 'a' | 'b' | 'shared' | null
     onSelectPath, // a faint route was clicked
     onPlaceSelected, // search or "use my location": ({ lat, lng, name, bounds })
     mapCoverage = null, // { deg, tiles: [[row, col], ...] } downloaded map tiles (MAP_INFO)
@@ -438,6 +439,7 @@ function MapView({
                         hoveredPathId={hoveredPathId}
                         isFavorite={isFavorite}
                         favoriteHue={favoriteHue}
+                        groupOf={compareGroupOf}
                     />
                 )}
                 {mode === 'display' && activePathSetId && (

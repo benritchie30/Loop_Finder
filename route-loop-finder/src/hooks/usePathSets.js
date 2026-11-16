@@ -5,6 +5,7 @@ import { applyPaint } from '../utils/paintRoads';
 import { deleteGeneration, loadGenerations, saveGeneration } from '../utils/generationsDb';
 import { lengthRange } from '../utils/pathSetGroups';
 import { routeKey } from '../utils/routeIdentity';
+import { compareSets, countGroups, inView, swappedView } from '../utils/compareSets';
 import { reverseUnpaved } from '../utils/surface';
 
 function newRouteId(pathSetId) {
@@ -114,6 +115,8 @@ export function usePathSets({ favorites = null } = {}) {
     const [sortAscending, setSortAscending] = useState(true);
     const sortByRef = useRef(sortBy);
     sortByRef.current = sortBy;
+    // Dev compare: { otherId, view } (B is otherId, A the open generation).
+    const [compareState, setCompareState] = useState(null);
 
     // ---- saved generations ----
 
@@ -277,6 +280,7 @@ export function usePathSets({ favorites = null } = {}) {
         }));
         setActiveId(pathSetId);
         setSelectedPathId(null);
+        setCompareState(null);
         resetFilterRanges();
     }, [resetFilterRanges]);
 
@@ -338,6 +342,7 @@ export function usePathSets({ favorites = null } = {}) {
         setHoveredPathId(null);
         setFavoritesOnly(false);
         setKeptIds(new Set());
+        setCompareState(null);
         if (pathSetId) resetFilterRanges();
     }, [pathSets, resetFilterRanges]);
 
@@ -382,7 +387,17 @@ export function usePathSets({ favorites = null } = {}) {
     // ---- the open generation's routes ----
 
     const activeSet = activeId ? pathSets[activeId] || null : null;
-    const allPaths = useMemo(() => activeSet?.paths || [], [activeSet]);
+    // Comparing: B still exists and is not A.
+    const otherSet = compareState && compareState.otherId !== activeId ? pathSets[compareState.otherId] || null : null;
+    const comparison = useMemo(
+        () => (activeSet && otherSet ? compareSets(activeSet.paths, otherSet.paths) : null),
+        [activeSet, otherSet],
+    );
+    const allPaths = useMemo(() => comparison?.paths || activeSet?.paths || [], [comparison, activeSet]);
+    const compareGroupOf = useCallback(
+        (path) => (comparison && path ? comparison.groupOf.get(path.id) || null : null),
+        [comparison],
+    );
 
     const generations = useMemo(() => Object.entries(pathSets)
         .map(([id, set]) => ({
@@ -409,15 +424,53 @@ export function usePathSets({ favorites = null } = {}) {
         return bounds;
     }, [allPaths]);
 
-    const filteredPaths = useMemo(() => {
+    // Routes that pass the filters (before the compare view picks a group).
+    const matchingPaths = useMemo(() => {
         if (!allPaths.length) return [];
         let paths = filterByMetrics(allPaths, routeFilters);
         paths = filterByRouteSelections(paths, drawnSelections);
         if (favoritesOnly) {
             paths = paths.filter((p) => keptIds.has(p.id) || (favorites && favorites.has(routeKey(p))));
         }
+        return paths;
+    }, [allPaths, routeFilters, drawnSelections, favoritesOnly, favorites, keptIds]);
+
+    const compareView = comparison ? compareState.view : 'all';
+    const filteredPaths = useMemo(() => {
+        const paths = comparison
+            ? matchingPaths.filter((p) => inView(comparison.groupOf.get(p.id), compareView))
+            : matchingPaths;
         return sortPaths(paths, sortBy, sortAscending);
-    }, [allPaths, routeFilters, drawnSelections, favoritesOnly, favorites, keptIds, sortBy, sortAscending]);
+    }, [matchingPaths, comparison, compareView, sortBy, sortAscending]);
+
+    const compare = useMemo(() => (comparison ? {
+        otherId: compareState.otherId,
+        otherName: otherSet.name || 'Generation',
+        view: compareView,
+        counts: countGroups(matchingPaths, comparison.groupOf), // after filters
+        totals: countGroups(comparison.paths, comparison.groupOf), // every route
+        aTotal: comparison.aTotal,
+        bTotal: comparison.bTotal,
+    } : null), [comparison, compareState, otherSet, compareView, matchingPaths]);
+
+    // Compare the open generation (A) with another one (B), from the same start.
+    const startCompare = useCallback((otherId) => {
+        if (!otherId || otherId === activeIdRef.current) return;
+        setCompareState({ otherId, view: 'all' });
+    }, []);
+    const setCompareView = useCallback((view) => {
+        setCompareState((prev) => (prev ? { ...prev, view } : prev));
+    }, []);
+    const endCompare = useCallback(() => setCompareState(null), []);
+    // B becomes the open generation (with its own painted roads), A the one compared with.
+    const swapCompare = useCallback(() => {
+        const a = activeIdRef.current;
+        const b = compareState?.otherId;
+        if (!a || !b || !pathSets[b]) return;
+        setActiveId(b);
+        setDrawnSelections(pathSets[b].selections || []);
+        setCompareState({ otherId: a, view: swappedView(compareState.view) });
+    }, [compareState, pathSets]);
 
     const currentPath = useMemo(() => {
         if (!selectedPathId) return filteredPaths[0] || null;
@@ -497,8 +550,12 @@ export function usePathSets({ favorites = null } = {}) {
     // Flip the elevation profile of the shown route (ride it the other way).
     const reverseCurrentPathProfile = useCallback(() => {
         if (!activeId || !currentPath) return;
+        // Comparing, the route can be B's.
+        const ownerId = [activeId, compareState?.otherId]
+            .find((id) => id && pathSets[id]?.paths.some((p) => p.id === currentPath.id));
+        if (!ownerId) return;
         setPathSets((prev) => {
-            const pathSet = prev[activeId];
+            const pathSet = prev[ownerId];
             if (!pathSet) return prev;
             const paths = [...pathSet.paths];
             const pathIndex = paths.findIndex((p) => p.id === currentPath.id);
@@ -514,9 +571,9 @@ export function usePathSets({ favorites = null } = {}) {
             // Unpaved stretches: same points on the map, miles from the other end.
             if (Array.isArray(properties.unpaved)) properties.unpaved = reverseUnpaved(properties.unpaved, totalDist);
             paths[pathIndex] = { ...currentPath, properties };
-            return { ...prev, [activeId]: { ...pathSet, paths } };
+            return { ...prev, [ownerId]: { ...pathSet, paths } };
         });
-    }, [activeId, currentPath]);
+    }, [activeId, currentPath, compareState, pathSets]);
 
     return {
         // State
@@ -537,6 +594,8 @@ export function usePathSets({ favorites = null } = {}) {
         pathSetMarkers,
         hoveredPathId,
         favoritesOnly,
+        compare, // dev compare: { otherId, otherName, view, counts, totals, aTotal, bTotal } or null
+        compareGroupOf, // (route) => 'a' | 'b' | 'shared' | null
 
         // Actions
         createPathSet,
@@ -569,5 +628,9 @@ export function usePathSets({ favorites = null } = {}) {
         reverseCurrentPathProfile,
         showFavoritesOnly,
         keepListed,
+        startCompare,
+        setCompareView,
+        swapCompare,
+        endCompare,
     };
 }

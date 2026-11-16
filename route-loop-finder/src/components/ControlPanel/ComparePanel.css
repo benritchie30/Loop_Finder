@@ -1,0 +1,197 @@
+/* ==========================================================================
+   Dev compare (LOOP_DEV=1): A (the open generation) against B.
+   Each group colour comes from --group-hue (utils/compareSets COMPARE_HUES).
+   ========================================================================== */
+
+.compare {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 8px 12px;
+    border-top: 1px dashed var(--color-border);
+    border-bottom: 1px dashed var(--color-border);
+    background: var(--color-surface);
+    flex: 0 0 auto;
+    font-size: 12px;
+}
+
+.compare--idle {
+    flex-direction: row;
+    align-items: center;
+    gap: 6px;
+}
+
+.compare__tag {
+    flex: 0 0 auto;
+    padding: 0 5px;
+    border-radius: 4px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: #8a5a00;
+    background: #fdf0d5;
+}
+
+.compare__icon {
+    flex: 0 0 auto;
+    color: var(--color-text-muted);
+}
+
+.compare__pick {
+    min-width: 0;
+    font-size: 12px;
+}
+
+.compare__none {
+    color: var(--color-text-muted);
+}
+
+.compare__sets {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+}
+
+.compare__set {
+    flex: 1 1 0;
+    min-width: 0;
+    padding: 2px 6px;
+    border-radius: 6px;
+    border-left: 3px solid hsl(var(--group-hue), 70%, 50%);
+    background: hsl(var(--group-hue), 80%, 95%);
+    color: var(--color-text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.compare__set b {
+    color: hsl(var(--group-hue), 70%, 38%);
+}
+
+.compare__switch {
+    display: flex;
+    gap: 2px;
+    padding: 3px;
+    border-radius: 9px;
+    background: var(--color-border);
+}
+
+.compare__view {
+    flex: 1 1 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0;
+    padding: 3px 2px;
+    border: none;
+    border-radius: 7px;
+    background: none;
+    font-size: 11px;
+    line-height: 1.25;
+    color: var(--color-text-muted);
+    cursor: pointer;
+}
+
+.compare__view:not(.compare__view--all) {
+    color: hsl(var(--group-hue), 55%, 40%);
+}
+
+.compare__view:hover:not(.is-active) {
+    background: rgba(255, 255, 255, 0.5);
+}
+
+.compare__view.is-active {
+    background: var(--color-bg);
+    color: var(--color-text);
+    font-weight: 600;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.12);
+}
+
+.compare__view:not(.compare__view--all).is-active {
+    background: hsl(var(--group-hue), 70%, 50%);
+    color: #fff;
+}
+
+.compare__count {
+    font-size: 14px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+}
+
+.compare__bar {
+    display: flex;
+    gap: 2px;
+    height: 8px;
+}
+
+.compare__seg {
+    flex: 1 1 0;
+    min-width: 4px;
+    padding: 0;
+    border: none;
+    border-radius: 3px;
+    background: hsl(var(--group-hue), 70%, 55%);
+    opacity: 0.75;
+    cursor: pointer;
+}
+
+.compare__seg:hover,
+.compare__seg.is-active {
+    opacity: 1;
+}
+
+.compare__seg.is-active {
+    box-shadow: 0 0 0 1.5px var(--color-text);
+}
+
+.compare__summary {
+    color: var(--color-text-muted);
+}
+
+.compare__filtered {
+    font-style: italic;
+}
+
+.compare__diff {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto minmax(0, 1fr);
+    gap: 2px 6px;
+    align-items: baseline;
+}
+
+.compare__diff-row {
+    display: contents;
+}
+
+.compare__diff-label {
+    color: var(--color-text-muted);
+    white-space: nowrap;
+}
+
+.compare__diff-val {
+    color: hsl(var(--group-hue), 65%, 35%);
+    font-weight: 600;
+    overflow-wrap: anywhere;
+}
+
+.compare__diff-arrow {
+    color: var(--color-text-muted);
+}
+
+/* A route card's group (comparing). */
+.route-card[data-group] {
+    box-shadow: inset 3px 0 0 hsl(var(--group-hue), 70%, 50%);
+}
+
+.route-card__group {
+    flex: 0 0 auto;
+    padding: 0 4px;
+    border-radius: 4px;
+    font-size: 10px;
+    font-weight: 700;
+    color: #fff;
+    background: hsl(var(--group-hue), 70%, 48%);
+}
