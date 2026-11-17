@@ -1,20 +1,78 @@
+import { useRef, useState } from 'react';
 import { ChevronLeft } from 'lucide-react';
 import { ROAD_WEIGHT_FIELDS, weightsForPreference } from '../../utils/roadWeights';
+import { numberFromText } from '../../utils/numberInput';
 
-function NumberField({ label, title, value, placeholder, onChange, min, max, step = 1 }) {
+/**
+ * A number box that lets you type freely. While it has focus its text is
+ * never rewritten (clear it, or pass through a value out of range on the
+ * way to another), but every keystroke that forms a number updates the
+ * setting at once, brought into range, so Enter uses what you typed. On
+ * leaving it (click out, Tab, Enter) the box is tidied: empty becomes
+ * `empty` (null: stays empty, the server's default shown as placeholder;
+ * restoreWhenEmpty: the value it had when you started editing it), and a
+ * number out of range the nearest allowed one. Stepping (the arrows on the
+ * box, the arrow keys) is tidied at once.
+ *
+ * The arrows snap to multiples of `step` counted from `inputMin` (the
+ * browser's grid), which can sit below `min`: with step 10 and inputMin 0
+ * the batch sizes go 10, 20, 30 (down from 10 reaches 0, tidied to 1).
+ */
+function NumberField({
+    label,
+    title,
+    value,
+    placeholder,
+    onChange,
+    min,
+    max,
+    step = 1,
+    inputMin = min,
+    integer = false,
+    empty = null,
+    restoreWhenEmpty = false,
+}) {
+    const [draft, setDraft] = useState(null); // the text while editing (null: show the setting)
+    const startValue = useRef(value); // the value when editing started (restoreWhenEmpty)
+    const shown = value == null ? '' : String(value);
+
+    const valueOf = (text) => numberFromText(text, {
+        min, max, integer, empty: restoreWhenEmpty ? startValue.current : empty,
+    });
+    // Puts the text's value in the setting; returns it.
+    const commit = (text) => {
+        const v = valueOf(text);
+        if (v !== value) onChange(v);
+        return v;
+    };
+    const tidy = (v) => (v == null ? '' : String(v));
+
     return (
         <label className="setting-item" title={title}>
             <span>{label}</span>
             <input
                 type="number"
-                value={value ?? ''}
+                value={draft ?? shown}
                 placeholder={placeholder}
-                min={min}
+                min={inputMin}
                 max={max}
                 step={step}
+                onFocus={() => {
+                    startValue.current = value;
+                    setDraft(shown);
+                }}
                 onChange={(e) => {
-                    const num = parseFloat(e.target.value);
-                    onChange(Number.isFinite(num) ? num : null);
+                    const text = e.target.value;
+                    const v = commit(text);
+                    // Typing (and deleting, pasting) has an inputType; stepping has none.
+                    setDraft(e.nativeEvent?.inputType ? text : tidy(v));
+                }}
+                onBlur={() => {
+                    if (draft != null) commit(draft);
+                    setDraft(null);
+                }}
+                onKeyDown={(e) => {
+                    if (e.key === 'Enter') setDraft(tidy(commit(draft ?? shown)));
                 }}
             />
         </label>
@@ -66,17 +124,25 @@ function AdvancedSettings({ genSettings, setGenSettings, algorithmOptions = [], 
                             label="First batch"
                             title="Routes found when you press Find loops"
                             value={genSettings.num_paths}
-                            onChange={(v) => set({ num_paths: v == null ? 20 : Math.max(1, Math.round(v)) })}
+                            onChange={(v) => set({ num_paths: v })}
                             min={1}
                             max={200}
+                            step={10}
+                            inputMin={0}
+                            integer
+                            empty={50}
                         />
                         <NumberField
                             label="More routes batch"
-                            title="Routes found each time you ask for more (M, a green road or area)"
+                            title="Routes found each time you ask for more: More routes (M), or a new green road or area when the option below is on"
                             value={genSettings.routes_per_pin}
-                            onChange={(v) => set({ routes_per_pin: v == null ? 10 : Math.max(1, Math.round(v)) })}
+                            onChange={(v) => set({ routes_per_pin: v })}
                             min={1}
                             max={100}
+                            step={10}
+                            inputMin={0}
+                            integer
+                            empty={20}
                         />
                         <NumberField
                             label="Explore weight"
@@ -113,10 +179,11 @@ function AdvancedSettings({ genSettings, setGenSettings, algorithmOptions = [], 
                             title="Two routes whose centers are closer than this count as the same route"
                             value={genSettings.min_dist_m}
                             placeholder="50"
-                            onChange={(v) => set({ min_dist_m: v == null ? 50 : Math.max(10, v) })}
+                            onChange={(v) => set({ min_dist_m: v })}
                             min={10}
                             max={1000}
                             step={10}
+                            empty={50}
                         />
                         {algorithmOptions.length > 1 && (
                             <label className="setting-item full-width">
@@ -132,6 +199,15 @@ function AdvancedSettings({ genSettings, setGenSettings, algorithmOptions = [], 
                             </label>
                         )}
                     </div>
+                    <label className="check">
+                        <input
+                            type="checkbox"
+                            checked={genSettings.auto_more_routes === true}
+                            onChange={(e) => set({ auto_more_routes: e.target.checked })}
+                        />
+                        <span>Find more routes when I add a road or area to include</span>
+                    </label>
+                    <p className="hint">When off, green roads and areas only filter the routes you have until you press More routes (M).</p>
                 </section>
 
                 <section className="advanced__section">
@@ -154,11 +230,14 @@ function AdvancedSettings({ genSettings, setGenSettings, algorithmOptions = [], 
                                 label={label}
                                 value={weights[key]}
                                 min={0}
-                                step={0.1}
-                                onChange={(v) => set({
-                                    road_preference: 'custom',
-                                    road_weights: { ...weights, [key]: v != null && v >= 0 ? v : 0 },
-                                })}
+                                step={1}
+                                restoreWhenEmpty
+                                onChange={(v) => {
+                                    // Clearing a box puts back the value it had (the Roads
+                                    // choice's): that alone does not make Roads Custom.
+                                    if (v == null || v === weights[key]) return;
+                                    set({ road_preference: 'custom', road_weights: { ...weights, [key]: v } });
+                                }}
                             />
                         ))}
                     </div>

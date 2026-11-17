@@ -11,10 +11,13 @@ import L from 'leaflet';
  * still. The map rests on whatever zoom it reaches (no snapping).
  */
 
-const ZOOM_PER_PX = 1 / 480; // one mouse-wheel notch (about 100 px) is about a fifth of a level
+const ZOOM_PER_PX = 1 / 500; // one mouse-wheel notch (about 100 px) is a fifth of a level
 const PINCH_ZOOM_PER_PX = 1 / 100; // trackpad pinch (wheel with ctrl): small deltas
 const MAX_STEP = 1; // levels one wheel event can add to the goal
-const EASE_MS = 90; // time constant of the glide: larger is smoother and slower
+// Time constant of the glide: larger is smoother and slower. At 35 ms a
+// notch is 40% done on its first frame and settled in about 80 ms, so the
+// map follows the wheel closely instead of drifting after it.
+const EASE_MS = 35;
 const DONE = 0.002; // levels from the goal at which the glide has arrived
 const IDLE_MS = 160; // the gesture ends this long after the last wheel event
 

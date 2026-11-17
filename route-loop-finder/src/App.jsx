@@ -23,6 +23,7 @@ import { downloadRouteGpx } from './utils/gpx';
 import { surfacePreference } from './utils/surface';
 import { automaticArea, boundaryBounds, boundaryContains, boundaryKey, boundaryPayload, cleanShapes, simplifyOutline } from './utils/boundary';
 import { useBoundaries } from './hooks/useBoundaries';
+import { useRouteHistory } from './hooks/useRouteHistory';
 
 /** What the server needs from a selection (geometry for roads is re-derived from node pairs). */
 function selectionPayload(selection) {
@@ -68,8 +69,8 @@ const SETTING_DEFAULTS = {
   min_path_len: 15,
   max_path_len: 30,
   loop_ratio: 0.5,
-  num_paths: 20,
-  routes_per_pin: 10,
+  num_paths: 50, // First batch (Advanced); settings already saved keep theirs
+  routes_per_pin: 20, // More routes batch
   more_algorithm: DEFAULT_ALGORITHM_OPTION.id,
   algorithm: DEFAULT_ALGORITHM_OPTION.id,
   search_default: SEARCH_DEFAULT_VERSION,
@@ -82,7 +83,20 @@ const SETTING_DEFAULTS = {
   surface_preference: 'allow', // paved | allow | gravel (utils/surface.js)
   rural_scale: true,
   boundary: null, // custom search boundary { id, name, shapes } (utils/boundary.js); null: automatic
+  auto_more_routes: false, // a new green road or include area on an open generation asks for more routes
 };
+
+// Preferences saved and edited with the search settings (Advanced) that are
+// not part of a search: never sent to the server, never stored with a
+// generation, and "Plan again from here" leaves them as they are.
+const APP_ONLY_SETTINGS = ['auto_more_routes'];
+
+/** A copy of the plan's settings for a search (and for the generation to keep). */
+function searchSettingsOf(settings) {
+  const copy = structuredClone(settings);
+  APP_ONLY_SETTINGS.forEach((key) => { delete copy[key]; });
+  return copy;
+}
 
 function readSettings() {
   try {
@@ -105,6 +119,7 @@ function readSettings() {
     delete parsed.road_weight_preset;
     parsed.road_weights = parsed.road_preference === 'custom' ? normalizeRoadWeights(parsed.road_weights) : null;
     if (typeof parsed.rural_scale !== 'boolean') parsed.rural_scale = true;
+    if (typeof parsed.auto_more_routes !== 'boolean') parsed.auto_more_routes = false;
     parsed.surface_preference = surfacePreference(parsed.surface_preference);
     parsed.boundary = parsed.boundary && cleanShapes(parsed.boundary.shapes).length
       ? { ...parsed.boundary, shapes: cleanShapes(parsed.boundary.shapes) }
@@ -681,13 +696,13 @@ function App() {
   const addToGeneration = useCallback((id) => {
     const set = pathSets[id];
     if (!set || !set.resumable) return false;
-    const settings = { ...structuredClone(genSettings), algorithm: pickAlgorithm(genSettings.algorithm) };
+    const settings = { ...searchSettingsOf(genSettings), algorithm: pickAlgorithm(genSettings.algorithm) };
     const selections = [...(set.selections || []),
       ...planSelections.filter((sel) => !(set.selections || []).some((x) => x.id === sel.id))];
     const sent = sendMessage('CONTINUE_GENERATION', {
       pathSetId: id,
       selections: selectionsPayload(selections),
-      num_paths: Math.max(1, Math.round(Number(settings.num_paths) || 20)),
+      num_paths: Math.max(1, Math.round(Number(settings.num_paths) || SETTING_DEFAULTS.num_paths)),
       algorithm: settings.algorithm,
       settings: requestSettings(settings),
       rebuild: rebuildFor(id), // its old settings: the server applies the new ones after
@@ -711,7 +726,7 @@ function App() {
     // Named after the place ("Dilworth, Charlotte"); a second one from there gets " 2".
     const place = pinName || `${pendingMarker.lat.toFixed(3)}, ${pendingMarker.lng.toFixed(3)}`;
     const name = suggestGenerationName(place, pathSets);
-    const settings = { ...structuredClone(genSettings), algorithm: algorithmId };
+    const settings = { ...searchSettingsOf(genSettings), algorithm: algorithmId };
     // Roads and areas painted before generating constrain the first search too.
     const sent = sendMessage('START_GENERATION', {
       lat: pendingMarker.lat,
@@ -949,7 +964,7 @@ function App() {
     const s = activeGeneration.settings || {};
     setGenSettings((prev) => ({
       ...prev,
-      ...Object.fromEntries(Object.entries(s).filter(([k]) => k in SETTING_DEFAULTS)),
+      ...Object.fromEntries(Object.entries(s).filter(([k]) => k in SETTING_DEFAULTS && !APP_ONLY_SETTINGS.includes(k))),
     }));
     const start = activeGeneration.markerPosition;
     closeGeneration();
@@ -1008,7 +1023,8 @@ function App() {
     const sent = sendMessage('CONTINUE_GENERATION', {
       pathSetId: activePathSetId,
       selections: selectionsPayload(selections),
-      num_paths: Math.max(1, Math.round(Number(settings.routes_per_pin ?? genSettings.routes_per_pin) || 10)),
+      num_paths: Math.max(1, Math.round(Number(settings.routes_per_pin ?? genSettings.routes_per_pin)
+        || SETTING_DEFAULTS.routes_per_pin)),
       algorithm: pickAlgorithm(settings.more_algorithm || settings.algorithm),
       settings: requestSettings(settings),
       rebuild: rebuildFor(activePathSetId),
@@ -1024,27 +1040,34 @@ function App() {
     requestMoreRoutes(drawnSelections, more || currentMore);
   }, [canContinue, activeIsGenerating, requestMoreRoutes, drawnSelections, currentMore, setCurrentMore]);
 
+  // Advanced "Find more routes when I add a road or area to include" (off by
+  // default): a new include on an open generation then asks for routes at
+  // once. Off, it only filters the routes there are; More routes (M) asks.
+  const autoMoreRoutes = genSettings.auto_more_routes === true;
+
   const handleSelection = useCallback((selection) => {
     addDrawnSelection(selection);
     setActiveTool(null);
-    // An include area on an open generation also asks for routes through it
-    // (and through every earlier include, avoiding every exclude).
-    if (canContinue && selection.type === 'include') requestMoreRoutes([...drawnSelections, selection]);
-  }, [addDrawnSelection, canContinue, requestMoreRoutes, drawnSelections]);
+    // An include area on an open generation (with the option on) also asks
+    // for routes through it (and through every earlier include, avoiding every exclude).
+    if (canContinue && autoMoreRoutes && selection.type === 'include') requestMoreRoutes([...drawnSelections, selection]);
+  }, [addDrawnSelection, canContinue, autoMoreRoutes, requestMoreRoutes, drawnSelections]);
 
   // Road tool: paint edges (or a whole road) green / red. Green on an open
-  // generation asks for routes through it; red only filters.
+  // generation asks for routes through it when the option is on (else it
+  // only filters, like red).
   const handleToggleEdges = useCallback((edges, options) => {
     toggleEdges(edges, options);
     if (!canContinue) return;
     const next = applyPaint(drawnSelections, edges, options);
     const greenCount = (list) => list.filter((s) => s.shape === 'edges' && s.type === 'include').length;
     if (options.type === 'include' && greenCount(next) > greenCount(drawnSelections)) {
-      requestMoreRoutes(next);
+      if (autoMoreRoutes) requestMoreRoutes(next);
     } else if (activeIsGenerating && next.length < drawnSelections.length) {
       handleStopGeneration(); // a constraint came off; the batch was built for it
     }
-  }, [toggleEdges, canContinue, drawnSelections, requestMoreRoutes, activeIsGenerating, handleStopGeneration]);
+  }, [toggleEdges, canContinue, autoMoreRoutes, drawnSelections, requestMoreRoutes, activeIsGenerating,
+    handleStopGeneration]);
 
   // A drawn excluded area: its roads turn red (only filters, like red roads).
   // Like an include area, drawing one is a single gesture: back to pan after.
@@ -1064,14 +1087,37 @@ function App() {
     if (canContinue && activeIsGenerating && drawnSelections.length > 0) handleStopGeneration();
   }, [undoLastSelection, canContinue, activeIsGenerating, drawnSelections.length, handleStopGeneration]);
 
+  // ---- back / forward through the routes viewed ([ and ]) ----
+  // The route view: a new history each time a generation opens. The plan's
+  // Favorites tab: a new one each time the tab is entered. Hidden routes
+  // (filters, painted roads, favorites only) are skipped.
+  const stepRouteHistory = useRouteHistory(
+    mode === 'display' ? currentPath?.id ?? null : null,
+    mode === 'display' ? activePathSetId : null,
+  );
+  const stepFavoriteHistory = useRouteHistory(
+    favoritesTab ? favCurrent?.id ?? null : null,
+    favoritesTab ? 'favorites' : null,
+  );
+
   // ---- keyboard ----
   useEffect(() => {
     const handleKeyDown = (e) => {
       const tag = e.target?.tagName;
+      // Enter on a closed dropdown with focus would open it again (the
+      // browser's default): it acts like Enter anywhere else instead (in
+      // the plan it starts the generation; in the route view it does nothing).
+      // An open dropdown takes its own keys, so picking with Enter still works.
+      if (e.key === 'Enter' && tag === 'SELECT') e.preventDefault();
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || e.target?.isContentEditable) {
-        if (!(e.key === 'Enter' && tag === 'INPUT')) return;
+        if (!(e.key === 'Enter' && (tag === 'INPUT' || tag === 'SELECT'))) return;
       }
       const plain = !e.ctrlKey && !e.metaKey && !e.altKey;
+      // [ back, ] forward through the routes viewed. Ctrl+Alt is AltGr, which
+      // types the brackets on some keyboards; Cmd / Ctrl + [ stay the browser's.
+      const historyDir = !e.metaKey && !(e.ctrlKey && !e.altKey)
+        ? { '[': -1, ']': 1 }[e.key] || 0
+        : 0;
 
       // The boundary editor: Enter uses it, Esc cancels a shape being dragged,
       // else the editor; C / B / F add a shape, K stops adding, Z removes the last.
@@ -1115,6 +1161,10 @@ function App() {
           e.preventDefault();
           prevPath();
         }
+        if (historyDir) {
+          e.preventDefault();
+          stepRouteHistory(historyDir, (id) => filteredPaths.some((p) => p.id === id), selectPath);
+        }
         if (plain && (e.key === 'e' || e.key === 'E')) setIsElevationMinimized((prev) => !prev);
         if (plain && (e.key === 'm' || e.key === 'M')) handleMoreRoutes();
         if (plain && (e.key === 's' || e.key === 'S')) toggleRouteFavorite(currentPath);
@@ -1131,6 +1181,11 @@ function App() {
         }
         if (plain && (e.key === 's' || e.key === 'S') && favCurrent) {
           toggleListedFavorite(favCurrent);
+          return;
+        }
+        if (historyDir) {
+          e.preventDefault();
+          stepFavoriteHistory(historyDir, (id) => favView.paths.some((p) => p.id === id), selectFavorite);
           return;
         }
         if (e.key === 'Escape' && favCurrent && !draftingRef.current?.()) {
@@ -1158,7 +1213,7 @@ function App() {
   }, [mode, startGeneration, closeGeneration, handleUndoSelection, handleMoreRoutes, nextPath, prevPath,
     activeTool, isGenerating, handleStopGeneration, toggleRouteFavorite, currentPath, planTab, favView, favCurrent,
     selectFavorite, toggleListedFavorite, editingBoundary, boundaryDraft, boundaryEdit, saveBoundaryDraft,
-    cancelBoundaryDraft]);
+    cancelBoundaryDraft, stepRouteHistory, stepFavoriteHistory, filteredPaths, selectPath]);
 
   const toolsProps = {
     activeTool,
@@ -1206,11 +1261,12 @@ function App() {
       favoriteSelected: favoritesTab ? favCurrent?.id ?? null : null,
       currentFavorite: !!currentPath && isFavorite(currentPath),
       generations: generations.map(({ id, name, pathCount, markerPosition }) => ({ id, name, pathCount, markerPosition })),
+      mapCoverage, // { deg, tiles }: the downloaded map tiles (MAP_INFO)
     };
   }, [mode, pendingMarker, activeTool, isExcludeMode, drawnSelections, currentPath, filteredPaths, totalPathsCount,
     isGenerating, sortBy, sortAscending, hoveredPathId, activePathSetId, generations, favoritesOnly, favorites,
     isFavorite, planTab, favoritesTab, favPaths, favCurrent, toolRoadIndex, genSettings.boundary, boundaryDraft,
-    boundaries, activePathSet]);
+    boundaries, activePathSet, mapCoverage]);
 
   // The automatic search area drawn on the map (grey dotted, like a custom
   // boundary): the plan's, around the start pin and following the length
@@ -1303,6 +1359,7 @@ function App() {
           isFavorite={isFavorite}
           favoriteHue={favoriteHueOf(primaryColor)}
           addingToName={addToId ? setsHere.find((g) => g.id === addToId)?.name || null : null}
+          arrowKeysStepRoutes={mode === 'display' || (favoritesTab && !activeTool)}
         />
 
         <ControlPanel

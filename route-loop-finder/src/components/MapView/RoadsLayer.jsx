@@ -27,7 +27,7 @@ function RoadsLayer({ index, offline, show }) {
         items: [roads],
     }] : []), [roads, show, offline, dark]);
 
-    return <CanvasLines groups={groups} live={false} />;
+    return <CanvasLines groups={groups} />;
 }
 
 export default RoadsLayer;

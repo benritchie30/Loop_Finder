@@ -10,8 +10,9 @@ const DOUBLE_CLICK_MS = 250;
 /**
  * Clicks with no tool active (pan mode).
  * - Route view: a click near routes shows the one there; clicking again where
- *   several run together steps through them (quick clicks too). Nothing is
- *   filtered or sent.
+ *   several run together steps through them (quick clicks too). Ctrl-click
+ *   (Cmd-click on a Mac) steps back through them, the reverse of clicking.
+ *   Nothing is filtered or sent. (Shift stays Leaflet's: Shift-drag zooms to a box.)
  * - Plan view: a click moves the start pin; with the Favorites tab open, a
  *   click near favorites shows one there instead (and steps like routes).
  * - Double-click a painted road, an area's outline, or an old pin: remove it
@@ -47,16 +48,17 @@ function PanInteractions({
         let pressed = false;
         const tolerance = (lat) => pointerReachM(map.getZoom(), lat);
 
-        const act = (latlng) => {
+        // step: 1 for a plain click (the next route there), -1 with Ctrl / Cmd (the one before).
+        const act = (latlng, step) => {
             const s = state.current;
             if (s.mode === 'display') {
                 const maxM = tolerance(latlng.lat);
-                const route = routeForClick(s.paths, s.currentPathId, latlng.lat, latlng.lng, maxM);
+                const route = routeForClick(s.paths, s.currentPathId, latlng.lat, latlng.lng, maxM, step);
                 if (route && route.id !== s.currentPathId) s.onSelectPath?.(route.id);
             } else if (s.mode === 'input') {
                 // The plan's Favorites tab: a click near favorites shows one; elsewhere it moves the start.
                 if (s.paths?.length) {
-                    const route = routeForClick(s.paths, s.currentPathId, latlng.lat, latlng.lng, tolerance(latlng.lat));
+                    const route = routeForClick(s.paths, s.currentPathId, latlng.lat, latlng.lng, tolerance(latlng.lat), step);
                     if (route) {
                         if (route.id !== s.currentPathId) s.onSelectPath?.(route.id);
                         return;
@@ -73,11 +75,13 @@ function PanInteractions({
         const onClick = (e) => {
             if (!pressed) return;
             const { latlng } = e;
+            const ev = e.originalEvent || {};
+            const step = ev.ctrlKey || ev.metaKey ? -1 : 1; // read now: the act may wait for a double-click
             const removable = selectionAt(state.current.selections, latlng.lat, latlng.lng, tolerance(latlng.lat));
             if (!removable) {
                 clearTimeout(timer);
                 timer = null;
-                act(latlng);
+                act(latlng, step);
                 return;
             }
             // Near something a double-click removes: wait to see if this is one.
@@ -85,7 +89,7 @@ function PanInteractions({
             clearTimeout(timer);
             timer = setTimeout(() => {
                 timer = null;
-                act(latlng);
+                act(latlng, step);
             }, DOUBLE_CLICK_MS);
         };
 

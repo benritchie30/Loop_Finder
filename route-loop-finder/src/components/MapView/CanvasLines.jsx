@@ -9,16 +9,23 @@ import { routeLatLngs } from '../../utils/surface';
  * thousands of pieces). As Leaflet layers every zoom projected each point
  * again (and SVG rebuilt each line), which stalled the map. Here the points
  * of an item are projected once (world pixels at zoom 0, kept for as long as
- * the item object lives); a redraw only scales them, so it costs a few
- * milliseconds and the canvas is redrawn on every frame of a wheel zoom
- * (SmoothWheelZoom): the lines stay sharp and in step with the map.
+ * the item object lives); a redraw only scales them.
  * The canvas takes no pointer events: routes and roads are hovered and
  * clicked map-wide (RouteHover, PanInteractions, RoadTool).
  *
- * groups: [{ style: { color, weight, opacity }, items: [item, ...] }]. An
- * item is a route (GeoJSON feature) or { lines: [[[lat, lng], ...], ...] }.
+ * groups: [{ style: { color, weight, opacity }, items: [item, ...], merge }].
+ * An item is a route (GeoJSON feature) or { lines: [[[lat, lng], ...], ...] }.
  * Each item is one stroke, so items that overlap add up (darker), as
- * separate lines do.
+ * separate lines do. With `merge`, the items are one shape instead: every
+ * piece of road any of them uses, drawn once in a single stroke (routes from
+ * one start share most of their roads: 50 routes of 64k points come to
+ * about 13k). Overlaps no longer darken, and it paints several times faster.
+ *
+ * While the map zooms nothing is painted: the last picture is scaled into
+ * place on every frame, exactly where the map is (its lines a little thicker
+ * or thinner for the moment), as the map tiles are. When the zoom ends the
+ * canvas is painted again, sharp. Painting every frame was too slow for a
+ * zoom to feel direct on modest hardware.
  */
 
 const MIN_STEP_PX = 1; // points closer than this to the last drawn one are skipped
@@ -59,6 +66,111 @@ function worldOf(item, crs) {
     return out;
 }
 
+/** A world from flat [x, y, ...] point lists (zoom-0 world pixels). */
+function worldFromParts(lists) {
+    const out = {
+        parts: [], boxes: new Float64Array(lists.length * 4),
+        minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity,
+    };
+    lists.forEach((list, n) => {
+        const xy = Float64Array.from(list);
+        let [minX, minY, maxX, maxY] = [Infinity, Infinity, -Infinity, -Infinity];
+        for (let i = 0; i < xy.length; i += 2) {
+            if (xy[i] < minX) minX = xy[i];
+            if (xy[i] > maxX) maxX = xy[i];
+            if (xy[i + 1] < minY) minY = xy[i + 1];
+            if (xy[i + 1] > maxY) maxY = xy[i + 1];
+        }
+        out.parts.push(xy);
+        out.boxes.set([minX, minY, maxX, maxY], n * 4);
+        out.minX = Math.min(out.minX, minX);
+        out.minY = Math.min(out.minY, minY);
+        out.maxX = Math.max(out.maxX, maxX);
+        out.maxY = Math.max(out.maxY, maxY);
+    });
+    return out;
+}
+
+// item -> per part, a key for each of its segments (the same either way round)
+const segmentKeysCache = new WeakMap();
+
+function segmentKeysOf(item, world) {
+    const cached = segmentKeysCache.get(item);
+    if (cached) return cached;
+    const keys = world.parts.map((xy) => {
+        const n = xy.length / 2;
+        const point = new Array(n);
+        for (let i = 0; i < n; i++) point[i] = `${Math.round(xy[i * 2] * 1e7)},${Math.round(xy[i * 2 + 1] * 1e7)}`;
+        const segs = new Array(n - 1);
+        for (let i = 1; i < n; i++) {
+            const a = point[i - 1];
+            const b = point[i];
+            segs[i - 1] = a < b ? `${a}|${b}` : `${b}|${a}`;
+        }
+        return segs;
+    });
+    segmentKeysCache.set(item, keys);
+    return keys;
+}
+
+// items array -> the merged world (a halo group and its line group share one)
+const mergedCache = new WeakMap();
+
+/** Every segment of the items, once: runs of segments not drawn yet become the parts. */
+function mergedWorldOf(items, crs) {
+    const cached = mergedCache.get(items);
+    if (cached) return cached;
+    const seen = new Set();
+    const chains = [];
+    items.forEach((item) => {
+        const world = worldOf(item, crs);
+        const keys = segmentKeysOf(item, world);
+        world.parts.forEach((xy, n) => {
+            const segs = keys[n];
+            let chain = null;
+            for (let i = 1; i <= segs.length; i++) {
+                const key = segs[i - 1];
+                if (seen.has(key)) {
+                    chain = null;
+                    continue;
+                }
+                seen.add(key);
+                if (!chain) {
+                    chain = [xy[i * 2 - 2], xy[i * 2 - 1]];
+                    chains.push(chain);
+                }
+                chain.push(xy[i * 2], xy[i * 2 + 1]);
+            }
+        });
+    });
+    const out = worldFromParts(chains);
+    mergedCache.set(items, out);
+    return out;
+}
+
+/** Add a world's parts that reach the canvas to the current path. */
+function traceWorld(ctx, world, k, dx, dy, view) {
+    if (world.maxX < view.left || world.minX > view.right || world.maxY < view.top || world.minY > view.bottom) return;
+    const { parts, boxes } = world;
+    for (let n = 0; n < parts.length; n++) {
+        const b = n * 4;
+        if (boxes[b + 2] < view.left || boxes[b] > view.right || boxes[b + 3] < view.top || boxes[b + 1] > view.bottom) continue;
+        const xy = parts[n];
+        let lastX = xy[0] * k + dx;
+        let lastY = xy[1] * k + dy;
+        ctx.moveTo(lastX, lastY);
+        const end = xy.length - 2;
+        for (let i = 2; i <= end; i += 2) {
+            const x = xy[i] * k + dx;
+            const y = xy[i + 1] * k + dy;
+            if (i < end && Math.abs(x - lastX) < MIN_STEP_PX && Math.abs(y - lastY) < MIN_STEP_PX) continue;
+            ctx.lineTo(x, y);
+            lastX = x;
+            lastY = y;
+        }
+    }
+}
+
 // L.Renderer places the canvas (with padding around the view) and scales it
 // during an animated zoom; this sizes and paints it.
 const LinesCanvas = L.Renderer.extend({
@@ -80,20 +192,17 @@ const LinesCanvas = L.Renderer.extend({
 
     setGroups(groups) {
         this._groups = groups || [];
+        // Dev server only: what the canvas draws (colour, number of lines per
+        // style), for the browser checks (backend/tools/check_frontend.py).
+        if (import.meta.env.DEV && this._container) {
+            this._container.dataset.lines = JSON.stringify(this._groups
+                .map((g) => ({ color: g.style?.color ?? null, lines: (g.items || []).length })));
+        }
         if (!this._map || this._frame) return;
         this._frame = L.Util.requestAnimFrame(() => {
             this._frame = null;
             if (this._map) this._draw();
         });
-    },
-
-    // A zoom that is not Leaflet's own animation (the wheel's glide, a pinch)
-    // changes the view frame by frame: redraw, rather than stretch the old picture.
-    // With `live` off (a whole road network is too much to paint every frame)
-    // the old picture is stretched until the zoom ends, as Leaflet's layers do.
-    _onZoom() {
-        if (this._map._animatingZoom || !this.options.live) L.Renderer.prototype._onZoom.call(this);
-        else this._update();
     },
 
     _update() {
@@ -133,39 +242,28 @@ const LinesCanvas = L.Renderer.extend({
         ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
         ctx.lineCap = 'round';
         ctx.lineJoin = 'round';
-
-        this._groups.forEach(({ style, items }) => {
+        const area = { x0: 0, y0: 0, x1: size.x, y1: size.y };
+        this._groups.forEach(({ style, items, merge }) => {
             const weight = style.weight || 2;
-            // The canvas, in world pixels (with room for the line's width).
-            const left = (-weight - dx) / k;
-            const right = (size.x + weight - dx) / k;
-            const top = (-weight - dy) / k;
-            const bottom = (size.y + weight - dy) / k;
+            // The painted area, in world pixels (with room for the line's width).
+            const view = {
+                left: (area.x0 - weight - dx) / k,
+                right: (area.x1 + weight - dx) / k,
+                top: (area.y0 - weight - dy) / k,
+                bottom: (area.y1 + weight - dy) / k,
+            };
             ctx.strokeStyle = style.color;
             ctx.lineWidth = weight;
             ctx.globalAlpha = style.opacity ?? 1;
-            items.forEach((item) => {
-                const world = worldOf(item, crs);
-                if (world.maxX < left || world.minX > right || world.maxY < top || world.minY > bottom) return;
-                const { parts, boxes } = world;
+            if (merge) {
                 ctx.beginPath();
-                for (let n = 0; n < parts.length; n++) {
-                    const b = n * 4;
-                    if (boxes[b + 2] < left || boxes[b] > right || boxes[b + 3] < top || boxes[b + 1] > bottom) continue;
-                    const xy = parts[n];
-                    let lastX = xy[0] * k + dx;
-                    let lastY = xy[1] * k + dy;
-                    ctx.moveTo(lastX, lastY);
-                    const end = xy.length - 2;
-                    for (let i = 2; i <= end; i += 2) {
-                        const x = xy[i] * k + dx;
-                        const y = xy[i + 1] * k + dy;
-                        if (i < end && Math.abs(x - lastX) < MIN_STEP_PX && Math.abs(y - lastY) < MIN_STEP_PX) continue;
-                        ctx.lineTo(x, y);
-                        lastX = x;
-                        lastY = y;
-                    }
-                }
+                traceWorld(ctx, mergedWorldOf(items, crs), k, dx, dy, view);
+                ctx.stroke();
+                return;
+            }
+            items.forEach((item) => {
+                ctx.beginPath();
+                traceWorld(ctx, worldOf(item, crs), k, dx, dy, view);
                 ctx.stroke();
             });
         });
@@ -173,23 +271,23 @@ const LinesCanvas = L.Renderer.extend({
     },
 });
 
-function CanvasLines({ groups, pane = 'overlayPane', padding = 0.5, live = true }) {
+function CanvasLines({ groups, pane = 'overlayPane', padding = 0.5 }) {
     const map = useMap();
     const layerRef = useRef(null);
 
     useEffect(() => {
-        const layer = new LinesCanvas({ pane, padding, live });
+        const layer = new LinesCanvas({ pane, padding });
         layer.addTo(map);
         layerRef.current = layer;
         return () => {
             layer.remove();
             layerRef.current = null;
         };
-    }, [map, pane, padding, live]);
+    }, [map, pane, padding]);
 
     useEffect(() => {
         layerRef.current?.setGroups(groups);
-    }, [groups, map, pane, padding, live]);
+    }, [groups, map, pane, padding]);
 
     return null;
 }

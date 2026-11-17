@@ -78,6 +78,40 @@ describe('clicking routes (pan mode)', () => {
 
     it('does nothing far from every route', () => {
         expect(routeForClick(paths, 'a', lat - 500 * M_LAT, lng, 50)).toBeNull();
+        expect(routeForClick(paths, 'a', lat - 500 * M_LAT, lng, 50, -1)).toBeNull();
+    });
+
+    describe('backwards (Ctrl / Cmd-click)', () => {
+        const d = routeThrough('d', [[0, 0], [0, 3], [-3, 3]]);
+        const e = routeThrough('e', [[0, -1], [0, 4]]);
+        const more = [a, b, c, d, e]; // on the clicked road: a, b, d, e
+        const forward = (id) => routeForClick(more, id, lat, lng, 200).id;
+        const back = (id) => routeForClick(more, id, lat, lng, 200, -1).id;
+
+        it('steps to the route before (the reverse of a plain click), wrapping', () => {
+            expect(back('e')).toBe('d');
+            expect(back('d')).toBe('b');
+            expect(back('b')).toBe('a');
+            expect(back('a')).toBe('e');
+        });
+
+        it('from a route not on that road, starts at the last one there', () => {
+            expect(back('c')).toBe('e');
+            expect(back(null)).toBe('e');
+            expect(forward('c')).toBe('a');
+        });
+
+        it('retraces forward clicks exactly', () => {
+            const seen = ['c'];
+            for (let k = 0; k < 6; k++) seen.push(forward(seen[seen.length - 1]));
+            const trail = [seen[seen.length - 1]];
+            for (let k = 0; k < 5; k++) trail.push(back(trail[trail.length - 1]));
+            expect(trail).toEqual(seen.slice(1).reverse()); // back to the first route the clicks showed
+        });
+
+        it('with one route on the road, stays on it', () => {
+            expect(routeForClick([a, c], 'a', lat, lng, 200, -1).id).toBe('a');
+        });
     });
 });
 

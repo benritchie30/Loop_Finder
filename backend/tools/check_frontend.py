@@ -42,14 +42,14 @@ UI_PORT = 5199
 # Start pins inside the uploaded tiles, with a short enough length that the
 # whole reach circle is covered. The rural one is on the junction of US 321 and
 # Laurel Creek Road (enough routes for the list to scroll).
-# `edge`: a start near the edge of the downloaded tiles, whose search area needs more.
+# (A start near the edge of the downloaded tiles is found each run: __chk.edgeStart.)
 # `dead_end`: the end of a dead-end street (Northside Drive, Boone; Marvin Road,
 # Charlotte; their whole reach is downloaded), where routes must start (not at
 # the nearest junction).
 AREAS = {
-    'rural': {'lat': 36.254622, 'lng': -81.851116, 'min': 6, 'max': 12, 'zoom': 13, 'edge': [36.03, -81.96],
+    'rural': {'lat': 36.254622, 'lng': -81.851116, 'min': 6, 'max': 12, 'zoom': 13,
               'dead_end': [36.248045, -81.855159]},
-    'city': {'lat': 35.2, 'lng': -80.8, 'min': 5, 'max': 10, 'zoom': 14, 'edge': [35.11, -80.89],
+    'city': {'lat': 35.2, 'lng': -80.8, 'min': 5, 'max': 10, 'zoom': 14,
              'dead_end': [35.197059, -80.8004]},
 }
 
@@ -246,6 +246,31 @@ class Results:
 
 JS_HELPERS = r"""
 window.__chk = {
+  // The start nearest (lat, lng) whose search area needs map tiles that are not
+  // downloaded (its own tile is), by the app's own tile maths (utils/mapTiles.js)
+  // and the tiles the server reported (MAP_INFO). Starts about 300 m around it
+  // need missing tiles too, so a click a pixel off still does. Null: none near.
+  async edgeStart(lat, lng, maxMiles) {
+    const { tilesForStart, tileOf } = await import('/src/utils/mapTiles.js');
+    const cov = window.__loopState.mapCoverage;
+    if (!cov || !cov.tiles) return null;
+    const have = new Set(cov.tiles.map(([r, c]) => `${r}_${c}`));
+    const has = (a, b) => { const [r, c] = tileOf(a, b, cov.deg); return have.has(`${r}_${c}`); };
+    const needsMore = (a, b) => tilesForStart(a, b, maxMiles, cov.deg).some(([r, c]) => !have.has(`${r}_${c}`));
+    const d = 0.003;
+    let best = null;
+    for (let i = -60; i <= 60; i++) {
+      for (let j = -60; j <= 60; j++) {
+        const a = lat + i * 0.01, b = lng + j * 0.01;
+        const dist = Math.hypot(i, j);
+        if (best && dist >= best.dist) continue;
+        const ok = [[0, 0], [d, 0], [-d, 0], [0, d], [0, -d]]
+          .every(([da, db]) => has(a + da, b + db) && needsMore(a + da, b + db));
+        if (ok) best = { lat: a, lng: b, dist };
+      }
+    }
+    return best && { lat: best.lat, lng: best.lng };
+  },
   // Screen (page) position of a lat/lng.
   screen(lat, lng) {
     const map = window.__loopMap;
@@ -356,8 +381,12 @@ window.__chk = {
       .map((p) => p.getAttribute('d') || '');
   },
   // The stroke colours of the faint routes.
-  faintStrokes() {
-    return [...document.querySelectorAll('.leaflet-backgroundPaths-pane path')].map((p) => p.getAttribute('stroke'));
+  // The faint routes: one canvas draws them (CanvasLines); on the dev server it
+  // records what it draws: [{ color, lines }] per style.
+  faintLines() {
+    return [...document.querySelectorAll('.leaflet-backgroundPaths-pane canvas[data-lines]')]
+      .flatMap((c) => JSON.parse(c.dataset.lines || '[]'))
+      .filter((g) => g.lines > 0);
   },
   // The stroke colour of the bold shown route.
   activeStroke() {
@@ -392,6 +421,20 @@ window.__chk = {
     return null;
   },
   // Is the selected card shown whole (inside the list box)?
+  // A point in the lowest card (not the selected one) showing at least minPx
+  // at the bottom of the list: the middle of what shows of it.
+  lowCard(minPx) {
+    const list = document.querySelector('.route-list');
+    const l = list.getBoundingClientRect();
+    const cards = [...list.querySelectorAll('.route-card')];
+    let pick = null;
+    cards.forEach((card, i) => {
+      const r = card.getBoundingClientRect();
+      if (card.classList.contains('is-selected') || r.top > l.bottom - minPx || r.bottom < l.top) return;
+      pick = { i, x: r.left + r.width / 2, y: (r.top + Math.min(r.bottom, l.bottom)) / 2 };
+    });
+    return pick;
+  },
   selectedCardWhole() {
     const list = document.querySelector('.route-list').getBoundingClientRect();
     const card = document.querySelector('.route-list .route-card.is-selected')?.getBoundingClientRect();
@@ -601,9 +644,13 @@ async def favorites_checks(page, area, res, shot):
     res.check(f'{area}: a card\'s star makes its route a favorite without selecting it',
               st['n'] == before + 2 and st['cur'] == first, str(st))
 
-    faint = await page.evaluate('() => window.__chk.faintStrokes()')
+    faint = await page.evaluate('() => window.__chk.faintLines()')
+    colours = sorted({g['color'] for g in faint})
+    drawn = sum(g['lines'] for g in faint)
+    listed = await state(page, 's.paths.length')
     res.check(f'{area}: faint favorite routes look like the other faint routes',
-              faint and len(set(faint)) == 1 and not faint[0].replace(' ', '').startswith('hsl(35,'), str(sorted(set(faint))))
+              len(colours) == 1 and not colours[0].replace(' ', '').startswith('hsl(35,') and drawn == listed - 1,
+              f'{colours}, {drawn} faint lines of {listed} routes')
     await page.locator('.route-card.is-favorite:not(.is-selected)').first.hover()
     await settle(page, 300)
     preview = await page.evaluate('() => window.__chk.activeStroke()')
@@ -686,10 +733,12 @@ async def all_favorites_checks(page, area, res, shot):
               await state(page, 's.pendingMarker') == pin)
     st = await state(page, '{ tab: s.planTab, shown: s.favoritesShown }')
     groups = await page.locator('.fav-group').count()
-    faint = await page.evaluate('() => window.__chk.faintStrokes().length')
+    faint = sum(g['lines'] for g in await page.evaluate('() => window.__chk.faintLines()'))
+    selected = 1 if await state(page, 's.favoriteSelected') else 0  # the selected one is drawn bold
     res.check(f'{area}: the Favorites tab lists every favorite, grouped by start',
               st['tab'] == 'favorites' and st['shown'] == total and groups >= 1, f"{st['shown']} of {total} in {groups} groups")
-    res.check(f'{area}: ...and draws them all on the map', faint == total, f'{faint} lines')
+    res.check(f'{area}: ...and draws them all on the map', faint + selected == total,
+              f'{faint} faint + {selected} selected of {total}')
     fit = await page.evaluate('() => window.__chk.panelFits()')
     res.check(f'{area}: ...the plan still fits', fit['fits'] and not fit['pageScroll'], str(fit))
 
@@ -1231,15 +1280,20 @@ async def offline_map_checks(page, area, res, received, shot):
     except Exception:
         back = False
     res.check(f'{area}: ...and takes the map to the downloaded area', back)
-    lat, lng = cfg['edge']
-    await page.evaluate('([a, b]) => window.__loopMap.setView([a, b], 12, { animate: false })', [lat, lng])
-    await settle(page, 400)
-    pt = await page.evaluate('([a, b]) => window.__chk.screen(a, b)', [lat, lng])
-    await page.mouse.click(pt['x'], pt['y'])
-    await settle(page, 600)
-    hint = await page.locator('.map-view__hint').inner_text()
-    res.check(f'{area}: a start that needs missing tiles says so', 'not downloaded' in hint, hint[:90])
-    await shot('offline_edge_pin')
+    # A start near the edge of the downloaded tiles (found each run: the map data grows)
+    edge = await page.evaluate('([a, b, m]) => window.__chk.edgeStart(a, b, m)', [cfg['lat'], cfg['lng'], cfg['max']])
+    res.check(f'{area}: (a start near the edge of the map data to try)', edge is not None,
+              f"{edge['lat']:.3f}, {edge['lng']:.3f}" if edge else 'none within 0.6 deg')
+    if edge:
+        lat, lng = edge['lat'], edge['lng']
+        await page.evaluate('([a, b]) => window.__loopMap.setView([a, b], 12, { animate: false })', [lat, lng])
+        await settle(page, 400)
+        pt = await page.evaluate('([a, b]) => window.__chk.screen(a, b)', [lat, lng])
+        await page.mouse.click(pt['x'], pt['y'])
+        await settle(page, 600)
+        hint = await page.locator('.map-view__hint').inner_text()
+        res.check(f'{area}: a start that needs missing tiles says so', 'not downloaded' in hint, hint[:90])
+        await shot('offline_edge_pin')
     await page.evaluate('(c) => window.__loopMap.setView([c.lat, c.lng], c.zoom, { animate: false })', cfg)
     await settle(page, 400)
 
@@ -1411,12 +1465,17 @@ async def run_area(page, area, res, only, sent, received):
                       f"gap {pair['gap']:.0f} px, previews {seq}")
 
         # clicking a card low in the list: it opens up in place, under the pointer,
-        # so no other card slides there and nothing else is previewed
+        # so no other card slides there and nothing else is previewed. The last
+        # route is selected first (its card out of view below), so the clicked card
+        # is a new selection and no card above it closes.
+        await page.locator('.route-card').last.click()
+        await settle(page, 600)
         await page.mouse.move(panel['x'] + 20, panel['y'] + 20)
         await page.evaluate("() => { document.querySelector('.route-list').scrollTop = 0; }")
         await settle(page, 300)
         list_box = await page.locator('.route-list').bounding_box()
-        x, y = list_box['x'] + list_box['width'] / 2, list_box['y'] + list_box['height'] - 50
+        low = await page.evaluate('() => window.__chk.lowCard(60)')  # room to open it under the pointer
+        x, y = low['x'], low['y']
         await page.mouse.move(x, y, steps=4)
         await settle(page, 150)
         under = await page.evaluate('([x, y]) => window.__chk.cardAt(x, y)', [x, y])
@@ -1452,6 +1511,26 @@ async def run_area(page, area, res, only, sent, received):
             res.check(f'{area}: ...and the next card previews when the pointer moves onto it',
                       await state(page, 's.hoveredPathId && s.paths.findIndex((p) => p.id === s.hoveredPathId)') == cur['i'] + 1)
         await page.evaluate('() => clearInterval(window.__hovTimer)')
+        await page.mouse.move(panel['x'] + 20, panel['y'] + 20)
+        await settle(page, 200)
+
+        # clicking the selected card when it is partly hidden at the bottom brings it into view
+        await page.evaluate('''() => { const list = document.querySelector('.route-list');
+            const card = list.querySelector('.route-card.is-selected');
+            list.scrollTop = card.offsetTop - list.clientHeight + 70; }''')
+        await settle(page, 300)
+        part = await page.evaluate('() => window.__chk.selectedCardWhole()')
+        sel = await state(page, 's.currentPath.id')
+        box = await page.locator('.route-card.is-selected').bounding_box()
+        list_box = await page.locator('.route-list').bounding_box()
+        px, py = box['x'] + box['width'] / 2, (box['y'] + list_box['y'] + list_box['height']) / 2
+        await page.mouse.move(px, py, steps=3)
+        await page.mouse.click(px, py)
+        await settle(page, 900)
+        whole = await page.evaluate('() => window.__chk.selectedCardWhole()')
+        res.check(f'{area}: clicking the selected card when it is partly hidden shows it whole',
+                  part and not part['whole'] and whole and whole['whole'] and await state(page, 's.currentPath.id') == sel,
+                  f'before {part}, after {whole}')
         await page.mouse.move(panel['x'] + 20, panel['y'] + 20)
         await settle(page, 200)
 
@@ -1500,11 +1579,21 @@ async def run_area(page, area, res, only, sent, received):
         await page.keyboard.press('r')
         await page.mouse.move(p['x'], p['y'] + 8)
         await settle(page, 120)
+        sent.clear()
         await page.mouse.click(p['x'], p['y'] + 8)
         await settle(page, 200)
         sel = await state(page, 's.selections.map((x) => x.type)')
         res.check(f'{area}: road tool click paints green', sel == ['include'], str(sel))
-        await wait_state(page, '!s.isGenerating', 60000)  # green asks for more routes
+        # Advanced "Find more routes when I add a road or area to include" is off by default
+        await settle(page, 800)
+        res.check(f'{area}: painting green asks for no routes (the option is off by default)',
+                  'CONTINUE_GENERATION' not in sent and not await state(page, 's.isGenerating'),
+                  ', '.join(sorted(set(sent))) or 'nothing')
+        await page.keyboard.press('m')
+        await settle(page, 300)
+        res.check(f'{area}: ...M asks for routes through it', sent.count('CONTINUE_GENERATION') == 1,
+                  f"{sent.count('CONTINUE_GENERATION')} requests")
+        await wait_state(page, '!s.isGenerating', 60000)
         await page.keyboard.press('d')  # exclude mode
         await page.mouse.click(p['x'], p['y'] + 8)
         await settle(page, 200)
@@ -1631,11 +1720,14 @@ async def run_area(page, area, res, only, sent, received):
         # include area (green dotted) with a red road inside it
         await page.keyboard.press('c')
         await page.mouse.move(p['x'], p['y'])
+        sent.clear()
         await page.mouse.down()
         await page.mouse.move(p['x'] + 60, p['y'], steps=8)
         await page.mouse.up()
-        await settle(page, 300)
-        await wait_state(page, '!s.isGenerating', 60000)
+        await settle(page, 800)
+        res.check(f'{area}: drawing an include area asks for no routes (the option is off by default)',
+                  'CONTINUE_GENERATION' not in sent and not await state(page, 's.isGenerating'),
+                  ', '.join(sorted(set(sent))) or 'nothing')
         paths = await page.evaluate('() => window.__chk.toolsPaths()')
         green = [x for x in paths if x['stroke'] == GREEN_AREA and x['dash']]
         res.check(f'{area}: an include area is a dotted green outline', len(green) == 1)

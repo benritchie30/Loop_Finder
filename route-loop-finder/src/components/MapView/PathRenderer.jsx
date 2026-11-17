@@ -187,7 +187,10 @@ function PathRenderer({
             if (!byStyle.has(style)) byStyle.set(style, []);
             byStyle.get(style).push(path);
         });
-        const groups = [...byStyle].map(([style, items]) => ({ style, items }));
+        // Each style's routes are one shape: every road they use, drawn once
+        // (CanvasLines `merge`), which paints several times faster than a line
+        // per route. Where routes overlap it no longer gets darker.
+        const groups = [...byStyle].map(([style, items]) => ({ style, items, merge: true }));
         // Under them all, their halos (so no halo covers another route's line).
         const halos = groups.map(({ style, items }) => ({
             style: {
@@ -196,6 +199,7 @@ function PathRenderer({
                 opacity: Math.min(1, style.opacity * 1.3),
             },
             items,
+            merge: true,
         }));
         return [...halos, ...groups];
     }, [showPathPreview, filteredPaths, shownPath, groupOf, groupStyles, inactiveStyle, dark]);

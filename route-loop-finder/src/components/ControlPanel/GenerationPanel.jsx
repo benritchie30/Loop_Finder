@@ -151,7 +151,16 @@ function GenerationPanel({
     const currentIdRef = useRef(currentId);
     currentIdRef.current = currentId;
     const selectCard = useCallback((id) => {
-        clickedId.current = id === currentIdRef.current ? null : id;
+        if (id === currentIdRef.current) {
+            // The selected card clicked again: bring it into view if it is
+            // partly hidden (the same just-enough scroll as a new selection).
+            clickedId.current = null;
+            if (listRef.current && selectedRef.current) {
+                revealUnderPointer(listRef.current, selectedRef.current, pointerAt.current?.y);
+            }
+            return;
+        }
+        clickedId.current = id;
         onSelectPath(id);
     }, [onSelectPath]);
     const cardActions = useRef({});
@@ -170,7 +179,9 @@ function GenerationPanel({
         }
         const top = card.offsetTop - (list.clientHeight - card.offsetHeight) / 2;
         const target = Math.max(0, Math.min(top, list.scrollHeight - list.clientHeight));
-        if (Math.abs(list.scrollTop - target) < 1) return;
+        // Scroll even when the list seems to be there already: a glide from an
+        // earlier change may still be running (and can read as being at the
+        // target for a moment); a new scroll replaces it.
         // Glide to a nearby card; jump when it is far (a long glide is slow and disorienting).
         const far = Math.abs(list.scrollTop - target) > list.clientHeight * 1.5;
         if (typeof list.scrollTo === 'function') list.scrollTo({ top: target, behavior: far ? 'auto' : 'smooth' });

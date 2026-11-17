@@ -675,7 +675,7 @@ async def _continue_generation(websocket, data, gen_state):
                 return
 
         selections = limits.selections(data.get("selections"))
-        max_paths = limits.count(data.get("num_paths"), 10, limits.MAX_PATHS)
+        max_paths = limits.count(data.get("num_paths"), 20, limits.MAX_PATHS)  # the UI's More routes batch default
         algorithm = _algorithm(data.get("algorithm"), session["algorithm"])
 
         resolved = await _resolve_and_report(websocket, path_set_id, session["G"], selections)

@@ -35,6 +35,31 @@ function MapRef({ mapRef }) {
     return null;
 }
 
+/**
+ * Where the arrow keys step through routes (the route view, the plan's
+ * Favorites tab), the map leaves them to the app, even after a click gave
+ * the map the keyboard focus: Leaflet would pan with them and stop the key
+ * there. + / - still zoom. Elsewhere the arrows pan the map as usual.
+ */
+function ArrowKeys({ stepRoutes }) {
+    const map = useMap();
+    useEffect(() => {
+        const keyboard = map.keyboard;
+        if (!stepRoutes || !keyboard) return undefined;
+        // Leaflet 1.9 (Map.Keyboard): _panKeys are the keys it pans with.
+        if (keyboard._panKeys && typeof keyboard._panKeys === 'object') {
+            const panKeys = keyboard._panKeys;
+            keyboard._panKeys = {};
+            return () => { keyboard._panKeys = panKeys; };
+        }
+        // Another Leaflet: no keyboard handling on the map while stepping.
+        const wasOn = keyboard.enabled();
+        keyboard.disable();
+        return () => { if (wasOn) keyboard.enable(); };
+    }, [map, stepRoutes]);
+    return null;
+}
+
 const DEFAULT_CENTER = [35.626288, -82.551141]; // Default to Asheville area
 const DEFAULT_ZOOM = 13;
 
@@ -92,6 +117,7 @@ function MapView({
     boundaryEdit = null, // the boundary being edited: { shapes, tool, add, change, draftingRef } (drawn with handles)
     isFavorite = null, // (route) => is it a favorite (drawn in the favorite colour)
     favoriteHue = 35, // the favorite colour's hue (the theme's complement)
+    arrowKeysStepRoutes = false, // the arrow keys step through routes here: the map does not pan with them
 }) {
     const mapRef = useRef(null);
     const getCenter = useCallback(() => {
@@ -334,6 +360,7 @@ function MapView({
                 scrollWheelZoom={false}
             >
                 <MapRef mapRef={mapRef} />
+                <ArrowKeys stepRoutes={arrowKeysStepRoutes} />
                 <SmoothWheelZoom />
                 <ZoomControl position="topleft" />
                 {/* Panes for Z-Index Management */}

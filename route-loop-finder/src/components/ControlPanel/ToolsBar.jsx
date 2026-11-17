@@ -32,7 +32,7 @@ function ToolsBar({
             label: 'Pan',
             title: mode === 'input'
                 ? 'Pan (K). Click the map to move the start.'
-                : 'Pan (K). Click near a route to show it; click again to step through routes there. Double-click a painted road or an area outline to remove it.',
+                : 'Pan (K). Click near a route to show it; click again to step through routes there (Ctrl-click, Cmd-click on a Mac, steps back). Double-click a painted road or an area outline to remove it.',
         },
         {
             id: 'road',

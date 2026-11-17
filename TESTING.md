@@ -170,11 +170,13 @@ the idle time (30 s here) generations and areas are dropped and memory is given 
 **Browser check**, on both areas:
 - *offline_map*: with the Blank road network map style and no start yet, the roads of the downloaded
   tiles are drawn; away from them a button goes back to them; a start near the edge, whose
-  search area needs tiles that are not downloaded, says so;
+  search area needs tiles that are not downloaded, says so (the check finds such a start near
+  each area every run, from the tiles the server reports, so it keeps working as the data grows);
 - *sidebar*: the panel fits without scrolling at 1400 × 900 and 1366 × 768, the tools are
   always visible, Advanced opens as its own page (a back arrow, no Done; Esc closes it),
   filters start with Length only and can be added / removed, the sort dropdown (a new
-  variable keeps the route, reversing selects the first), going back from a generation started
+  variable keeps the route, reversing selects the first and scrolls the list to it, even while
+  the list is still gliding from the sort change), going back from a generation started
   with Enter on the Advanced page shows the plan, the arrows step and keep the
   selected card in the middle of its list, a clicked card instead stays under the pointer
   and shows whole, More routes options, the elevation chart stays clear of the panel,
@@ -183,23 +185,27 @@ the idle time (30 s here) generations and areas are dropped and memory is given 
   (no flicker), the elevation chart follows, the marker hides away from the route and off the
   map; hovering a route card shows only that route in bold (the chart stays on the selected one),
   moving from card to card never drops the preview in the gap, and a card clicked low in the list
-  stays under the pointer, so small moves after the click preview no other card; the mouse wheel
+  stays under the pointer and shows whole, so small moves after the click preview no other card;
+  clicking the selected card when it is partly hidden shows it whole; the mouse wheel
   scrolls one card per notch (quick notches queue, a trackpad swipe of about a card is one card,
   up goes back one), and the card it brings under the pointer is previewed;
 - *click*: a click near another route shows it, clicking again cycles, a click away from routes
   changes nothing, quick clicks never zoom, nothing is added or sent to the server;
-- *road_tool*: paints green, clears in either mode, paints red without asking for routes,
-  Ctrl-click paints a whole road, double-click removes it without zooming, double-click
-  elsewhere does not zoom;
+- *road_tool*: paints green without asking for routes (Advanced "Find more routes when I add a
+  road or area to include" is off by default) and M then asks once, clears in either mode, paints
+  red without asking for routes, Ctrl-click paints a whole road, double-click removes it without
+  zooming, double-click elsewhere does not zoom;
 - *areas*: drawing a box, circle or freeform in the plan leaves the start pin where it was; an
   excluded box is a dotted red outline (not red roads), the Road tool inside it shows its roads
   and turns one back on and off, leaving hides them; with "Painted roads & areas" switched off
   they are hidden in pan mode (and cannot be double-clicked away) and shown while a tool is
-  active; double-clicking the outline removes it; an include circle is a dotted green outline
+  active; double-clicking the outline removes it; drawing an include circle asks for no routes
+  (the option is off by default); an include circle is a dotted green outline
   at full strength, a red road can go inside it, every listed route enters it;
 - *favorites*: S makes the shown route a favorite, drawn in the favorite colour (the theme
   colour's complement) with its card marked; a card's star favorites its route without selecting
-  it; faint favorites look like the other faint routes, a favorite previewed from its card is in
+  it; faint favorites look like the other faint routes (one canvas draws the faint routes; on the
+  dev server it records the colours and number of lines it draws), a favorite previewed from its card is in
   the favorite colour; Favorites lists only the favorites (staying on the shown one), an unfavorited route stays
   listed while shown and is gone at the next; favorites are kept after a reload and after
   deleting their generation, and marked again when it is reopened;

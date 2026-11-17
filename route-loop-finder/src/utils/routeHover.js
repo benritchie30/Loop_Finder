@@ -166,13 +166,16 @@ export function routesAtPoint(paths, lat, lng, maxM, slackM = Math.max(5, maxM *
 /**
  * The route a click at (lat, lng) should show. Clicking again where the
  * shown route runs with others steps to the next of them (wrapping), so
- * repeated clicks cycle through every route on that road. Null when no
- * route is within maxM.
+ * repeated clicks cycle through every route on that road. `step` -1 goes
+ * the other way (Ctrl / Cmd-click): back to the one before, and from a
+ * route not on that road to the last one there. Null when no route is
+ * within maxM.
  */
-export function routeForClick(paths, currentId, lat, lng, maxM) {
+export function routeForClick(paths, currentId, lat, lng, maxM, step = 1) {
     const here = routesAtPoint(paths, lat, lng, maxM);
     if (!here.length) return null;
+    const n = here.length;
     const i = here.findIndex((path) => path.id === currentId);
-    if (i < 0) return here[0];
-    return here[(i + 1) % here.length];
+    if (i < 0) return step < 0 ? here[n - 1] : here[0];
+    return here[(((i + step) % n) + n) % n];
 }
