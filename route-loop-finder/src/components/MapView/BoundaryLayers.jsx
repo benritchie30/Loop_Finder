@@ -2,12 +2,14 @@ import { Fragment, useMemo, useRef } from 'react';
 import { Circle, Marker, Polygon, Rectangle } from 'react-leaflet';
 import L from 'leaflet';
 import { metersBetween } from '../../utils/routeSelections';
+import { useMapDark } from '../../utils/theme';
 
 const M_PER_DEG = 111320;
 // A saved / a generation's boundary: a grey dotted outline.
 const BOUNDARY_STYLE = { color: '#64748b', weight: 2, opacity: 0.9, dashArray: '2 6', lineCap: 'round', fill: false };
 // The boundary being edited.
 const EDIT_STYLE = { color: '#334155', weight: 2, opacity: 0.95, dashArray: '6 5', fillColor: '#64748b', fillOpacity: 0.08 };
+const EDIT_STYLE_DARK = { ...EDIT_STYLE, color: '#cbd5e1' }; // on a dark map
 
 function ShapeOutline({ shape, style }) {
     if (shape.shape === 'circle') {
@@ -197,11 +199,12 @@ function FreeformHandles({ shape, onChange }) {
  * remove it).
  */
 export function BoundaryEditLayer({ shapes, onChange }) {
+    const dark = useMapDark();
     return (shapes || []).map((shape, i) => {
         const change = (next) => onChange(i, next);
         return (
             <Fragment key={i}>
-                <ShapeOutline shape={shape} style={EDIT_STYLE} />
+                <ShapeOutline shape={shape} style={dark ? EDIT_STYLE_DARK : EDIT_STYLE} />
                 {shape.shape === 'circle' && <CircleHandles shape={shape} onChange={change} />}
                 {shape.shape === 'box' && <BoxHandles shape={shape} onChange={change} />}
                 {shape.shape === 'freeform' && <FreeformHandles shape={shape} onChange={change} />}

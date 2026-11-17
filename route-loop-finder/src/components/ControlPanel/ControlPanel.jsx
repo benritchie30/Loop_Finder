@@ -88,10 +88,27 @@ function ControlPanel({
         </div>
     );
 
+    // The app's mark: a loop that comes back to its start.
+    const brand = (
+        <span className="brand-mark" aria-hidden="true">
+            <svg width="18" height="18" viewBox="0 0 32 32" fill="none">
+                <path
+                    className="brand-mark__loop"
+                    d="M16 24.500c-5.500 0-9.500-3.400-9.500-8s3.800-8 8.500-8c4 0 7 2.700 7 6.100 0 3.100-2.400 5.400-5.500 5.400"
+                    stroke="currentColor"
+                    strokeWidth="3"
+                    strokeLinecap="round"
+                />
+                <circle cx="16" cy="24.500" r="3" fill="currentColor" />
+            </svg>
+        </span>
+    );
+
     if (minimized) {
         return (
             <div className="control-panel control-panel--minimized">
                 <div className="panel-top">
+                    {brand}
                     <span className="panel-title">{title}</span>
                     {actions}
                 </div>
@@ -137,6 +154,7 @@ function ControlPanel({
     return (
         <div className="control-panel">
             <div className="panel-top">
+                {brand}
                 <span className="panel-title">{title}</span>
                 {actions}
             </div>

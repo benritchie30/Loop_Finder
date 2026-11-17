@@ -20,6 +20,9 @@ import OfflineBasemap from './OfflineBasemap';
 import { coverageGroups, nearestGroup, tileBounds, tileKey, tilesForStart } from '../../utils/mapTiles';
 import { boundaryBounds } from '../../utils/boundary';
 import SearchBox from './SearchBox';
+import SmoothWheelZoom from './SmoothWheelZoom';
+import QuickActions from './QuickActions';
+import { MapDarkContext, useTheme } from '../../utils/theme';
 
 /** Hands the Leaflet map to MapView (search flies it, search ranks results near its centre). */
 function MapRef({ mapRef }) {
@@ -155,6 +158,13 @@ function MapView({
         if (!roadToolOn) setRevealedAreaId(null);
     }, [roadToolOn]);
     const offline = !MAP_STYLES[activeStyle]?.url;
+    // Dark appearance: internet tiles are dimmed (unless that is turned off, and never
+    // satellite imagery); the road network basemap is drawn dark. `mapDark`: the map
+    // under the routes is dark, so they are drawn in light colours.
+    const { theme, darkTiles } = useTheme();
+    const satellite = activeStyle === 'satellite';
+    const dimTiles = theme === 'dark' && darkTiles && !offline && !satellite;
+    const mapDark = satellite || (theme === 'dark' && (offline || darkTiles));
     // Hidden painted roads and areas still filter routes; they show again
     // while a tool is active. Hidden, a double-click cannot remove them.
     const selectionsShown = showSelections || !!activeTool;
@@ -265,12 +275,13 @@ function MapView({
     const isConnected = wsStatus === 'connected';
 
     return (
-        <div className={`map-view ${offline ? 'map-view--offline' : ''}`}>
+        <MapDarkContext.Provider value={mapDark}>
+        <div className={`map-view ${offline ? 'map-view--offline' : ''} ${mapDark ? 'map-view--dark' : ''} ${dimTiles ? 'map-view--dim-tiles' : ''}`}>
             {/* Connection status */}
             {showStatus && (
                 <div className="map-view__status">
                     <div className={`map-view__status-dot map-view__status-dot--${isConnected ? 'connected' : 'disconnected'}`} />
-                    <span>{isConnected ? 'Server Connected' : 'Server Disconnected'}</span>
+                    <span>{isConnected ? 'Connected' : 'Server disconnected'}</span>
                 </div>
             )}
 
@@ -305,6 +316,8 @@ function MapView({
                 onStyleChange={handleStyleChange}
             />
 
+            <QuickActions />
+
             {/* Instruction hint */}
             <div className={`map-view__hint ${hintText ? 'map-view__hint--visible' : ''} ${isGenerating ? 'map-view__hint--low' : ''}`}>
                 {hintText}
@@ -315,12 +328,19 @@ function MapView({
                 zoom={zoom}
                 style={{ height: '100%', width: '100%' }}
                 zoomControl={false}
+                // The wheel glides to any zoom (SmoothWheelZoom), so the map does not
+                // snap to whole levels; the + / - buttons still move one level.
+                zoomSnap={0}
+                scrollWheelZoom={false}
             >
                 <MapRef mapRef={mapRef} />
-                <ZoomControl position="bottomleft" />
+                <SmoothWheelZoom />
+                <ZoomControl position="topleft" />
                 {/* Panes for Z-Index Management */}
                 <Pane name="basemap" style={{ zIndex: 250 }} />
                 <Pane name="backgroundPaths" style={{ zIndex: 400 }} />
+                {/* The bold route's outline: over the faint routes, under the route itself */}
+                <Pane name="routeCasing" style={{ zIndex: 440 }} />
                 <Pane name="activePath" style={{ zIndex: 450 }} />
                 <Pane name="tools" style={{ zIndex: 500 }} />
 
@@ -375,7 +395,7 @@ function MapView({
                         isExcludeMode={false}
                         onSelection={boundaryEdit.add}
                         draftingRef={boundaryEdit.draftingRef}
-                        drawStyle={{ color: '#334155', weight: 2, opacity: 0.95, dashArray: '6 5', fillColor: '#64748b', fillOpacity: 0.08 }}
+                        drawStyle={{ color: mapDark ? '#cbd5e1' : '#334155', weight: 2, opacity: 0.95, dashArray: '6 5', fillColor: '#64748b', fillOpacity: 0.08 }}
                     />
                 )}
                 {!boundaryEdit && boundaryShapes && <BoundaryOutline shapes={boundaryShapes} />}
@@ -431,6 +451,7 @@ function MapView({
                         filteredPaths={filteredPaths}
                         backgroundPane="backgroundPaths"
                         activePane="activePath"
+                        casingPane="routeCasing"
                         showArrows={showArrows}
                         showCentroids={showCentroids}
                         primaryColor={primaryColor}
@@ -458,6 +479,7 @@ function MapView({
                         filteredPaths={favoritesView.paths}
                         backgroundPane="backgroundPaths"
                         activePane="activePath"
+                        casingPane="routeCasing"
                         showArrows={showArrows}
                         showCentroids={showCentroids}
                         primaryColor={primaryColor}
@@ -479,6 +501,7 @@ function MapView({
 
             </MapContainer>
         </div>
+        </MapDarkContext.Provider>
     );
 }
 

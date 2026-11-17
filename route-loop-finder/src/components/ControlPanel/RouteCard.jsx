@@ -1,4 +1,4 @@
-import { forwardRef } from 'react';
+import { forwardRef, memo } from 'react';
 import { Download, Star } from 'lucide-react';
 import Sparkline from './Sparkline';
 import { formatClimbRate, formatClimb, formatDistance, useUnits } from '../../utils/units';
@@ -51,9 +51,10 @@ function Details({ p, units, onDownloadGpx }) {
  * One route in the list: length, climb, elevation shape, a star (favorite).
  * The selected card opens up with a few more numbers. Pointer moves over it
  * are reported with onHover(id, event); the list decides what is previewed
- * on the map. A favorite is marked in the favorite colour.
+ * on the map. A favorite is marked in the favorite colour. Memoized: the
+ * list keeps its handlers' identities, so only cards that change render.
  */
-const RouteCard = forwardRef(function RouteCard({
+const RouteCard = memo(forwardRef(function RouteCard({
     path, number, selected, onSelect, onHover, favorite = false, onToggleFavorite, onDownloadGpx,
     group = null, // dev compare: 'a' | 'b' | 'shared'
 }, ref) {
@@ -109,6 +110,6 @@ const RouteCard = forwardRef(function RouteCard({
             {selected && <Details p={p} units={units} onDownloadGpx={onDownloadGpx && (() => onDownloadGpx(path))} />}
         </div>
     );
-});
+}));
 
 export default RouteCard;

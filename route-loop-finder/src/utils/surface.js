@@ -41,6 +41,14 @@ function latLngs(path) {
     return (coords || []).map(([lng, lat]) => [lat, lng]);
 }
 
+/** The route's line for a Leaflet Polyline: [[lat, lng], ...], or one such list per part of a MultiLineString. */
+export function routeLatLngs(path) {
+    const g = path?.geometry;
+    const flip = (coords) => (coords || []).map(([lng, lat]) => [lat, lng]);
+    if (g?.type === 'MultiLineString') return (g.coordinates || []).map(flip);
+    return g?.type === 'LineString' ? flip(g.coordinates) : [];
+}
+
 /**
  * The route's line cut into paved and unpaved pieces for the map:
  * { paved: [[[lat, lng], ...], ...], unpaved: [...] }. Neighbouring pieces

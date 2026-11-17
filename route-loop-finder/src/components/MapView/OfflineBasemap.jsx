@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import L from 'leaflet';
 import { Polygon, Polyline, useMap, useMapEvents } from 'react-leaflet';
 import { coverageOutline, tileBounds, tileKey, tilesInBounds } from '../../utils/mapTiles';
+import { useTheme } from '../../utils/theme';
 
 // Below this zoom only the downloaded area is drawn (too many roads to be useful).
 const ROADS_MIN_ZOOM = 10;
@@ -14,6 +15,15 @@ const CLASS_STYLE = [
     { color: '#c6cbd2', weight: 1.2 },
     { color: '#b9cbb6', weight: 1.1 },
 ];
+// The dark appearance: a night map (dark ground, roads that get dimmer as they get smaller).
+const CLASS_STYLE_DARK = [
+    { color: '#66758a', weight: 2.6 },
+    { color: '#4c596b', weight: 1.8 },
+    { color: '#394452', weight: 1.2 },
+    { color: '#35493d', weight: 1.1 },
+];
+const GROUND = { light: '#fcfbf7', dark: '#171c24' };
+const OUTLINE = { light: '#8b95a3', dark: '#55627a' };
 
 const positionsCache = new WeakMap(); // a tile's lines -> per class [[lat, lng], ...] lists
 
@@ -47,6 +57,8 @@ function viewOf(map) {
  */
 function OfflineBasemap({ coverage, tileRoads, onNeedTiles, onCoverageInView }) {
     const map = useMap();
+    const dark = useTheme().theme === 'dark';
+    const classStyle = dark ? CLASS_STYLE_DARK : CLASS_STYLE;
     // A canvas renderer draws in its own pane (not the layer's): put it under the route layers.
     const renderer = useMemo(() => L.canvas({ padding: 0.4, pane: 'basemap' }), []);
     const [view, setView] = useState(() => viewOf(map));
@@ -101,7 +113,7 @@ function OfflineBasemap({ coverage, tileRoads, onNeedTiles, onCoverageInView }) 
             {ground.length > 0 && (
                 <Polygon
                     positions={ground}
-                    pathOptions={{ renderer, stroke: false, fillColor: '#fcfbf7', fillOpacity: 1 }}
+                    pathOptions={{ renderer, stroke: false, fillColor: dark ? GROUND.dark : GROUND.light, fillOpacity: 1 }}
                     pane="basemap"
                     interactive={false}
                 />
@@ -110,7 +122,7 @@ function OfflineBasemap({ coverage, tileRoads, onNeedTiles, onCoverageInView }) 
                 <Polyline
                     key={k}
                     positions={byClass[k]}
-                    pathOptions={{ renderer, ...CLASS_STYLE[k], opacity: 1, lineCap: 'round', lineJoin: 'round' }}
+                    pathOptions={{ renderer, ...classStyle[k], opacity: 1, lineCap: 'round', lineJoin: 'round' }}
                     pane="basemap"
                     interactive={false}
                 />
@@ -118,7 +130,7 @@ function OfflineBasemap({ coverage, tileRoads, onNeedTiles, onCoverageInView }) 
             {outline.length > 0 && (
                 <Polyline
                     positions={outline}
-                    pathOptions={{ color: '#8b95a3', weight: 1.5, opacity: 0.9, dashArray: '6 5' }}
+                    pathOptions={{ color: dark ? OUTLINE.dark : OUTLINE.light, weight: 1.5, opacity: 0.9, dashArray: '6 5' }}
                     pane="basemap"
                     interactive={false}
                 />

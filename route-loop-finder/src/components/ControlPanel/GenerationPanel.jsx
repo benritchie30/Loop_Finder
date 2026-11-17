@@ -145,10 +145,19 @@ function GenerationPanel({
     const currentId = currentPath?.id;
     const pointerAt = useRef(null); // last pointer position over the list
     const clickedId = useRef(null); // a card was clicked: the selection it makes stays put
+    // The cards' handlers keep one identity (they read what is current from
+    // refs), so a card renders again only when something it shows changes:
+    // a new route streaming in leaves the other cards alone.
+    const currentIdRef = useRef(currentId);
+    currentIdRef.current = currentId;
     const selectCard = useCallback((id) => {
-        clickedId.current = id === currentId ? null : id;
+        clickedId.current = id === currentIdRef.current ? null : id;
         onSelectPath(id);
-    }, [currentId, onSelectPath]);
+    }, [onSelectPath]);
+    const cardActions = useRef({});
+    cardActions.current = { onToggleFavorite, onDownloadGpx };
+    const toggleFavoriteCard = useCallback((path) => cardActions.current.onToggleFavorite?.(path), []);
+    const downloadGpxCard = useCallback((path) => cardActions.current.onDownloadGpx?.(path), []);
     useLayoutEffect(() => {
         const list = listRef.current;
         const card = selectedRef.current;
@@ -512,8 +521,8 @@ function GenerationPanel({
                             onSelect={selectCard}
                             onHover={hoverCard}
                             favorite={!!isFavorite && isFavorite(path)}
-                            onToggleFavorite={onToggleFavorite}
-                            onDownloadGpx={onDownloadGpx}
+                            onToggleFavorite={onToggleFavorite ? toggleFavoriteCard : undefined}
+                            onDownloadGpx={onDownloadGpx ? downloadGpxCard : undefined}
                             group={compareGroupOf ? compareGroupOf(path) : null}
                         />
                     ))}

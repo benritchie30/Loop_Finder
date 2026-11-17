@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Layers } from 'lucide-react';
+import { Check, Layers } from 'lucide-react';
 import './MapView.css';
 import { MAP_STYLES } from './mapStyles';
 
@@ -12,8 +12,8 @@ function MapTileSwitcher({ currentStyle, onStyleChange }) {
             onMouseEnter={() => setIsOpen(true)}
             onMouseLeave={() => setIsOpen(false)}
         >
-            <div className="map-tile-switcher__button">
-                <Layers size={20} />
+            <div className="map-tile-switcher__button" title="Basemap">
+                <Layers size={18} />
             </div>
 
             {isOpen && (
@@ -29,6 +29,7 @@ function MapTileSwitcher({ currentStyle, onStyleChange }) {
                         >
                             <div className={`map-tile-switcher__preview map-tile-switcher__preview--${key}`}></div>
                             <span>{style.name}</span>
+                            {currentStyle === key && <Check size={14} className="map-tile-switcher__check" />}
                         </div>
                     ))}
                 </div>

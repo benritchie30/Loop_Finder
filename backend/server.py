@@ -946,11 +946,27 @@ def allowed_origins():
 ALLOWED_ORIGINS = allowed_origins()
 
 
+def _warm_up_kernel():
+    import tree_kernel
+    t0 = time.perf_counter()
+    try:
+        ready = tree_kernel.warm_up()
+    except Exception as exc:  # a broken numba must not stop the server: the Python loops still work
+        tree_kernel.disable()
+        print(f"Compiled search loops unavailable ({type(exc).__name__}: {exc}); using the Python ones.")
+        return
+    print(f"Compiled search loops ready in {time.perf_counter() - t0:.1f}s." if ready
+          else "numba is not installed (or LOOP_NO_NUMBA is set): searches use the Python loops, slower on large areas.")
+
+
 async def main():
     info = store.stats()
     print(f"Map data: {store.tile_dir} ({info['tiles']} tiles, {info['mb']} MB)")
     print(f"Starting WebSocket server on {HOST}:{PORT} (routes up to {MAX_ROUTE_MILES:g} mi)...")
     print(settings_summary())
+    # Load (or, the first time on this machine, compile) the search's compiled
+    # loops now, in the background, so the first search does not wait for it.
+    threading.Thread(target=_warm_up_kernel, name='kernel-warm-up', daemon=True).start()
     try:
         server = await websockets.serve(handler, HOST, PORT, max_size=limits.MAX_MESSAGE_BYTES,
                                         process_request=process_request, origins=ALLOWED_ORIGINS)

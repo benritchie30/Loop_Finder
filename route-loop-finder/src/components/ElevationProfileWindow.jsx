@@ -443,16 +443,16 @@ function ElevationProfileWindow({ elevationProfile: rawProfile, unpaved: rawUnpa
                     >
                         <defs>
                             <linearGradient id="elevGradient" x1="0" y1="0" x2="0" y2="1">
-                                <stop offset="0%" stopColor="var(--color-primary)" stopOpacity="0.5" />
-                                <stop offset="100%" stopColor="var(--color-primary)" stopOpacity="0.08" />
+                                <stop offset="0%" stopColor="var(--color-primary)" stopOpacity="0.45" />
+                                <stop offset="100%" stopColor="var(--color-primary)" stopOpacity="0.02" />
                             </linearGradient>
                             <pattern id="unpavedBars" patternUnits="userSpaceOnUse" width={UNPAVED_BAR * 2} height="10">
                                 <rect width={UNPAVED_BAR} height="10" fill={UNPAVED_COLOR} />
-                                <rect x={UNPAVED_BAR} width={UNPAVED_BAR} height="10" fill="#ffffff" />
+                                <rect x={UNPAVED_BAR} width={UNPAVED_BAR} height="10" fill="var(--chart-gap)" />
                             </pattern>
                             {/* With grade colours: white bars only, so the grade colour shows between them */}
                             <pattern id="unpavedBarsOver" patternUnits="userSpaceOnUse" width={UNPAVED_BAR * 2} height="10">
-                                <rect x={UNPAVED_BAR} width={UNPAVED_BAR} height="10" fill="#ffffff" fillOpacity="0.85" />
+                                <rect x={UNPAVED_BAR} width={UNPAVED_BAR} height="10" fill="var(--chart-gap)" fillOpacity="0.85" />
                             </pattern>
                             <clipPath id="chart-clip">
                                 <rect
@@ -475,7 +475,7 @@ function ElevationProfileWindow({ elevationProfile: rawProfile, unpaved: rawUnpa
                                 stroke="var(--color-border)"
                                 strokeWidth="0.5"
                                 strokeDasharray="3,3"
-                                opacity="0.3"
+                                opacity="0.8"
                             />
                         ))}
 
@@ -500,10 +500,11 @@ function ElevationProfileWindow({ elevationProfile: rawProfile, unpaved: rawUnpa
 
                             {/* Elevation Line (dark over grade colours, which include the theme's blues) */}
                             <path
+                                className={showGradeColors ? undefined : 'elevation-window__line'}
                                 d={chartData.linePath}
                                 fill="none"
-                                stroke={showGradeColors ? '#1e293b' : 'var(--color-primary)'}
-                                strokeWidth="2.5"
+                                stroke={showGradeColors ? 'var(--color-text)' : 'var(--color-primary)'}
+                                strokeWidth="2"
                                 strokeLinejoin="round"
                             />
 
@@ -512,7 +513,7 @@ function ElevationProfileWindow({ elevationProfile: rawProfile, unpaved: rawUnpa
                                 <path
                                     d={chartData.gradePath}
                                     fill="none"
-                                    stroke="#6b7280"
+                                    stroke="var(--color-text-muted)"
                                     strokeWidth="1.5"
                                     strokeOpacity="0.8"
                                     strokeLinejoin="round"
@@ -528,8 +529,9 @@ function ElevationProfileWindow({ elevationProfile: rawProfile, unpaved: rawUnpa
                                     y={PADDING.top}
                                     width={Math.abs(dragCurrent - dragStart)}
                                     height={chartData.plotH}
-                                    fill="rgba(33, 150, 243, 0.2)"
-                                    stroke="rgba(33, 150, 243, 0.5)"
+                                    fill="var(--color-primary-light)"
+                                    stroke="var(--color-primary)"
+                                    strokeOpacity="0.6"
                                 />
                             </g>
                         )}

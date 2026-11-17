@@ -7,26 +7,59 @@
 /* Deleted a generation: undo for a few seconds */
 .undo-toast {
   position: fixed;
-  left: 50%;
+  left: calc((100vw - var(--panel-space)) / 2);
   bottom: 24px;
   transform: translateX(-50%);
   z-index: 1200;
   display: flex;
   align-items: center;
   gap: 14px;
-  padding: 10px 14px;
-  border-radius: 8px;
-  background: #1f2937;
-  color: #fff;
+  padding: 10px 10px 10px 16px;
+  border-radius: 14px;
+  background: var(--toast-bg);
+  -webkit-backdrop-filter: blur(14px) saturate(1.5);
+  backdrop-filter: blur(14px) saturate(1.5);
+  color: var(--toast-text);
   font-size: 13px;
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
+  font-weight: 500;
+  box-shadow: 0 14px 36px -8px hsl(0 0% 0% / 0.45);
+  overflow: hidden;
+  animation: toast-in 360ms var(--ease-spring);
+}
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translateX(-50%) translateY(14px) scale(0.95); }
+  to { opacity: 1; transform: translateX(-50%); }
+}
+
+/* The time left to undo runs out along the bottom (App: UNDO_MS) */
+.undo-toast::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2px;
+  background: var(--toast-link);
+  transform-origin: left;
+  animation: toast-timer 7s linear forwards;
+}
+
+@keyframes toast-timer {
+  to { transform: scaleX(0); }
 }
 
 .undo-toast button {
   border: none;
-  background: none;
-  color: #93c5fd;
+  background: hsl(0 0% 50% / 0.22);
+  color: var(--toast-link);
   font-weight: 600;
   cursor: pointer;
-  padding: 0;
+  padding: 5px 12px;
+  border-radius: 8px;
+  transition: background var(--transition-fast);
+}
+
+.undo-toast button:hover {
+  background: hsl(0 0% 50% / 0.36);
 }

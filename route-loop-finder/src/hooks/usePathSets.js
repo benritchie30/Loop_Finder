@@ -28,6 +28,8 @@ export const SORT_OPTIONS = [
 ];
 const FILTERS_VERSION = '2'; // 2: Climb is no longer a default filter
 const SAVE_DELAY_MS = 1200;
+const STREAM_SAVE_MS = 20000; // while a generation is still receiving routes
+const ADD_BATCH_MS = 100; // routes that arrive within this are added together (one render)
 
 /** Next unused name, so two searches from the same place stay apart. */
 export function suggestGenerationName(base, pathSets) {
@@ -94,7 +96,8 @@ function readRouteFilters() {
  * Generations (path sets) and the routes of the open one.
  * A generation: { markerPosition, paths, isComplete, resumable, name,
  * settings, selections, createdAt, batches, lastNote }. Generations are
- * saved in the browser (IndexedDB) as they change and loaded at start.
+ * saved in the browser (IndexedDB) as they change and all loaded at start,
+ * routes included, so opening one is instant.
  * `favorites` (hooks/useFavorites: key -> record) drives "favorites only",
  * which lists the open generation's favorite routes; one unfavorited there
  * stays listed until another route is selected.
@@ -143,12 +146,16 @@ export function usePathSets({ favorites = null } = {}) {
         return () => { cancelled = true; };
     }, []);
 
-    // Save changed generations a moment after the last change (routes stream
-    // in one by one), and at once when the page is hidden or closed.
     const pathSetsRef = useRef(pathSets);
     pathSetsRef.current = pathSets;
+    const activeIdRef = useRef(activeId);
+    activeIdRef.current = activeId;
+
+    // Save changed generations a moment after the last change (routes stream
+    // in one by one), and at once when the page is hidden or closed.
     const flushSaves = useCallback(() => {
         clearTimeout(saveTimer.current);
+        saveTimer.current = null;
         Object.entries(pathSetsRef.current).forEach(([id, set]) => {
             if (savedRef.current.get(id) === set) return;
             savedRef.current.set(id, set);
@@ -156,11 +163,20 @@ export function usePathSets({ favorites = null } = {}) {
         });
     }, []);
     useEffect(() => {
-        if (!hydrated) return undefined;
+        if (!hydrated) return;
+        // A save copies every route of the generation (the page stalls for a
+        // moment on a big one), so while routes stream in there is one every
+        // STREAM_SAVE_MS at most; the batch's end saves the rest.
+        const streaming = Object.values(pathSets).some((set) => !set.isComplete);
+        if (streaming) {
+            if (saveTimer.current == null) saveTimer.current = setTimeout(flushSaves, STREAM_SAVE_MS);
+            return;
+        }
         clearTimeout(saveTimer.current);
         saveTimer.current = setTimeout(flushSaves, SAVE_DELAY_MS);
-        return () => clearTimeout(saveTimer.current);
     }, [pathSets, hydrated, flushSaves]);
+    useEffect(() => () => clearTimeout(saveTimer.current), []);
+
     useEffect(() => {
         const onHide = () => {
             if (document.visibilityState === 'hidden') flushSaves();
@@ -215,8 +231,6 @@ export function usePathSets({ favorites = null } = {}) {
     // is opened again). In input mode they are the plan's, for the first search.
     const selectionsRef = useRef(drawnSelections);
     selectionsRef.current = drawnSelections;
-    const activeIdRef = useRef(activeId);
-    activeIdRef.current = activeId;
     useEffect(() => {
         const id = activeIdRef.current;
         if (!id) return;
@@ -284,17 +298,34 @@ export function usePathSets({ favorites = null } = {}) {
         resetFilterRanges();
     }, [resetFilterRanges]);
 
-    const addPathToSet = useCallback((pathSetId, pathData) => {
+    // Routes arrive one by one, often in bursts: those of one ADD_BATCH_MS
+    // are added together, so the app renders once for them.
+    const pendingAdds = useRef([]);
+    const addTimer = useRef(null);
+    const flushAdds = useCallback(() => {
+        clearTimeout(addTimer.current);
+        addTimer.current = null;
+        const adds = pendingAdds.current;
+        if (!adds.length) return;
+        pendingAdds.current = [];
         setPathSets((prev) => {
-            const pathSet = prev[pathSetId];
-            if (!pathSet) return prev;
-            const pathWithId = { ...pathData, id: newRouteId(pathSetId) };
-            return { ...prev, [pathSetId]: { ...pathSet, paths: [...pathSet.paths, pathWithId] } };
+            let next = prev;
+            adds.forEach(({ pathSetId, path }) => {
+                const pathSet = next[pathSetId];
+                if (pathSet) next = { ...next, [pathSetId]: { ...pathSet, paths: [...pathSet.paths, path] } };
+            });
+            return next;
         });
     }, []);
+    useEffect(() => () => clearTimeout(addTimer.current), []);
+    const addPathToSet = useCallback((pathSetId, pathData) => {
+        pendingAdds.current.push({ pathSetId, path: { ...pathData, id: newRouteId(pathSetId) } });
+        if (addTimer.current == null) addTimer.current = setTimeout(flushAdds, ADD_BATCH_MS);
+    }, [flushAdds]);
 
     // A batch ended. `info.note` explains a thin batch.
     const completePathSet = useCallback((pathSetId, info = {}) => {
+        flushAdds(); // the batch's last routes first
         setPathSets((prev) => {
             const pathSet = prev[pathSetId];
             if (!pathSet) return prev;
@@ -303,7 +334,7 @@ export function usePathSets({ favorites = null } = {}) {
             if (info.note !== undefined) next.lastNote = info.note;
             return { ...prev, [pathSetId]: next };
         });
-    }, []);
+    }, [flushAdds]);
 
     // More routes started for a generation.
     const resumePathSet = useCallback((pathSetId) => {
@@ -319,12 +350,13 @@ export function usePathSets({ favorites = null } = {}) {
 
     // The server cannot continue it (and had nothing to rebuild from).
     const expirePathSetSession = useCallback((pathSetId) => {
+        flushAdds();
         setPathSets((prev) => {
             const pathSet = prev[pathSetId];
             if (!pathSet) return prev;
             return { ...prev, [pathSetId]: { ...pathSet, isComplete: true, resumable: false } };
         });
-    }, []);
+    }, [flushAdds]);
 
     /**
      * Open a generation (null closes it); its painted roads and areas come

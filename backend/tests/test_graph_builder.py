@@ -183,5 +183,50 @@ class DeepRequestTests(unittest.TestCase):
             pts = {spot(c) for c in f['geometry']['coordinates']}
             self.assertTrue(any(a in pts and b in pts for a, b in ends))
 
+class KernelTests(unittest.TestCase):
+    """tree_kernel (numba) must give the tree and the routes of the Python loops."""
+
+    def setUp(self):
+        import tree_kernel
+        self.kernel = tree_kernel
+        if tree_kernel.grow is None:
+            self.skipTest('numba is not installed')
+        self.saved = (tree_kernel.grow, tree_kernel.span, tree_kernel.one_way,
+                      tree_kernel.touch, tree_kernel.stem_hit)
+
+    def tearDown(self):
+        k = self.kernel
+        k.grow, k.span, k.one_way, k.touch, k.stem_hit = self.saved
+
+    def test_same_tree(self):
+        import loop_tree as lt
+        from road_stress import annotate_edge_stress
+        G, start, _ = build(at(2, 2), [DEAD_END, ONE_WAY])
+        annotate_edge_stress(G)
+        E = lt.edge_table(G)
+        E.refresh_stress()
+        penalty = [0.0005 * (u % 3) for u in range(E.n_uid)]
+        trees = []
+        for compiled in (True, False):
+            if not compiled:
+                self.kernel.disable()
+            for forward in (True, False):
+                bound = lt._node_dist(E, start, forward=not forward)
+                T = lt.grow_tree(E, start, forward, MAX_M, bound, 0.3 / 1609.34, penalty, forbidden={3})
+                trees.append((T.cost, T.dist, T.qual, T.par, bytes(T.done), T.route_hash, list(T.order),
+                              [int(x) for x in T.span()[0]], [int(x) for x in T.span()[1]],
+                              [int(x) for x in T.one_way(E.rev)]))
+        self.assertEqual(trees[0], trees[2])
+        self.assertEqual(trees[1], trees[3])
+
+    def test_same_routes(self):
+        G, start, _ = build(at(2, 2), [DEAD_END, ONE_WAY])
+        compiled = [f['geometry']['coordinates'] for f in routes(G, start, n=40)]
+        self.kernel.disable()
+        plain = [f['geometry']['coordinates'] for f in routes(G, start, n=40)]
+        self.assertGreater(len(compiled), 5)
+        self.assertEqual(compiled, plain)
+
+
 if __name__ == '__main__':
     unittest.main()

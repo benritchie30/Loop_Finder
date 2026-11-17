@@ -9,8 +9,9 @@
  */
 const DB_NAME = 'loop-finder';
 const STORE = 'generations';
+const HEADS = 'generationHeads';
 const FAVORITES = 'favorites';
-const VERSION = 2; // 2: favorites
+const VERSION = 3; // 2: favorites; 3: generation heads (no longer used: see loadGenerations)
 
 let dbPromise = null;
 
@@ -25,6 +26,8 @@ function openDb() {
         req.onupgradeneeded = () => {
             const db = req.result;
             if (!db.objectStoreNames.contains(STORE)) db.createObjectStore(STORE, { keyPath: 'id' });
+            // Unused now, kept so a browser that has version 3 opens the same way.
+            if (!db.objectStoreNames.contains(HEADS)) db.createObjectStore(HEADS, { keyPath: 'id' });
             if (!db.objectStoreNames.contains(FAVORITES)) db.createObjectStore(FAVORITES, { keyPath: 'key' });
         };
         req.onsuccess = () => {
@@ -67,9 +70,34 @@ function run(mode, work, storeName = STORE) {
     }));
 }
 
-/** Every saved generation (unordered). */
-export function loadGenerations() {
-    return run('readonly', (store) => store.getAll()).then((rows) => (Array.isArray(rows) ? rows : []));
+const HEAD_FIELDS = ['name', 'createdAt', 'markerPosition', 'settings', 'selections', 'batches', 'lastNote'];
+
+/**
+ * Every saved generation, routes included (unordered).
+ * For a short while generations also had a small "head" record (so routes
+ * could be read only when one was opened), and a rename or a painted road on
+ * a closed generation was written to the head alone. Any head left is put
+ * back into its generation here, once, and the heads are cleared.
+ */
+export async function loadGenerations() {
+    const [rows, heads] = await Promise.all([
+        run('readonly', (store) => store.getAll()),
+        run('readonly', (store) => store.getAll(), HEADS),
+    ]);
+    const records = Array.isArray(rows) ? rows : [];
+    if (!Array.isArray(heads) || !heads.length) return records;
+    const byId = new Map(heads.map((h) => [h.id, h]));
+    const merged = records.map((record) => {
+        const head = byId.get(record.id);
+        if (!head) return record;
+        const next = { ...record };
+        HEAD_FIELDS.forEach((key) => { if (key in head) next[key] = head[key]; });
+        const changed = HEAD_FIELDS.some((key) => JSON.stringify(next[key]) !== JSON.stringify(record[key]));
+        if (changed) saveGeneration(next);
+        return changed ? next : record;
+    });
+    await run('readwrite', (store) => store.clear(), HEADS);
+    return merged;
 }
 
 /** Save (insert or replace) one generation record. */

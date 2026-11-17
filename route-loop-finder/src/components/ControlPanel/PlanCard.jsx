@@ -1,4 +1,4 @@
-import { Pencil } from 'lucide-react';
+import { Pencil, Sparkles } from 'lucide-react';
 import DualRange from './DualRange';
 import { boundaryContains } from '../../utils/boundary';
 import ToolsBar from './ToolsBar';
@@ -246,7 +246,9 @@ function PlanCard({
                     ? `Add loops to “${setsHere.find((g) => g.id === addToId)?.name}” (Enter)`
                     : 'Find loops from the start (Enter)'}
             >
+                <Sparkles size={16} />
                 {addToId ? 'Add loops' : 'Find loops'}
+                <span className="btn-primary__keys" aria-hidden="true">↵</span>
             </button>
         </div>
     );

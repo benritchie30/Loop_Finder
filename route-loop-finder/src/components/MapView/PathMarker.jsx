@@ -6,21 +6,15 @@ import { useEffect, useMemo, useRef } from 'react';
 // badge (a generation's route count). `highlight` is the pin of the
 // generation under the pointer in "Your loops": bigger and orange.
 const createMarkerIcon = (color, count) => {
-    const colors = {
-        pending: '#3068c8',   // Medium blue
-        active: '#1e3a5f',    // Dark navy
-        inactive: '#94a3b8',  // Cool slate
-        highlight: '#ea580c', // Orange
-    };
-
-    const fillColor = colors[color] || colors.inactive;
+    // Colours come from the theme (MapView.css: .custom-marker-icon--pending / --active / --highlight).
+    const kind = ['pending', 'active', 'inactive', 'highlight'].includes(color) ? color : 'inactive';
     const big = color === 'highlight';
     const [w, h] = big ? [32, 48] : [24, 36];
 
     const svgIcon = `
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 36" width="${w}" height="${h}">
-      <path fill="${fillColor}" stroke="#fff" stroke-width="1" d="M12 0C5.4 0 0 5.4 0 12c0 7.2 12 24 12 24s12-16.8 12-24c0-6.6-5.4-12-12-12z"/>
-      <circle fill="#fff" cx="12" cy="12" r="4"/>
+      <path class="pin__body" stroke-width="1.5" d="M12 0.750C5.800 0.750 0.750 5.800 0.750 12c0 6.900 11.250 22.700 11.250 22.700S23.250 18.900 23.250 12C23.250 5.800 18.200 0.750 12 0.750z"/>
+      <circle class="pin__dot" cx="12" cy="12" r="4.200"/>
     </svg>
   `;
 
@@ -29,7 +23,7 @@ const createMarkerIcon = (color, count) => {
         : '';
     return L.divIcon({
         html: `${svgIcon}${badge}`,
-        className: `custom-marker-icon${big ? ' custom-marker-icon--highlight' : ''}`,
+        className: `custom-marker-icon custom-marker-icon--${kind}`,
         iconSize: [w, h],
         iconAnchor: [w / 2, h],
         popupAnchor: [0, -h]

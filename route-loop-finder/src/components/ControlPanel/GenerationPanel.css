@@ -8,13 +8,14 @@
     flex-direction: column;
     height: 100%;
     min-height: 0;
+    animation: fade-in 300ms var(--ease-out);
 }
 
 .gen-panel__header {
     display: flex;
     align-items: flex-start;
     gap: 2px;
-    padding: 10px 8px 8px 6px;
+    padding: 12px 8px 10px 6px;
     flex: 0 0 auto;
 }
 
@@ -30,15 +31,21 @@
     padding: 0;
     border: none;
     background: none;
-    font-size: 15px;
-    font-weight: 650;
-    letter-spacing: -0.01em;
+    font-size: 16px;
+    font-weight: 620;
+    letter-spacing: -0.02em;
     color: var(--color-text);
     text-align: left;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
     cursor: text;
+    border-radius: 4px;
+    transition: color var(--transition-fast);
+}
+
+.gen-panel__name:hover {
+    color: var(--color-primary);
 }
 
 .gen-panel__name-input {
@@ -46,10 +53,13 @@
     font: inherit;
     font-size: 15px;
     font-weight: 600;
-    padding: 2px 4px;
+    padding: 2px 6px;
     border: 1px solid var(--color-primary);
-    border-radius: 5px;
+    border-radius: 6px;
+    background: var(--color-bg);
+    color: var(--color-text);
     outline: none;
+    box-shadow: 0 0 0 3px var(--color-primary-light);
 }
 
 .gen-panel__sub {
@@ -66,10 +76,11 @@
 }
 
 .gen-settings {
-    padding: 8px 16px;
+    padding: 10px 16px;
     border-top: 1px solid var(--color-border);
     background: var(--color-surface);
     flex: 0 0 auto;
+    animation: fade-in 200ms var(--ease-out);
 }
 
 .gen-settings__row {
@@ -108,6 +119,11 @@
     width: 40px;
 }
 
+.sort-row .icon-btn--boxed {
+    width: 32px;
+    height: 32px;
+}
+
 .filter {
     display: flex;
     flex-direction: column;
@@ -130,7 +146,9 @@
 .filter__value,
 .filter__note {
     margin-left: auto;
-    font-size: 12px;
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    letter-spacing: -0.03em;
     color: var(--color-text-muted);
     font-variant-numeric: tabular-nums;
 }
@@ -154,7 +172,7 @@
     align-items: center;
     gap: 3px;
     font-size: 12px;
-    font-weight: 500;
+    font-weight: 550;
     color: var(--color-primary);
     cursor: pointer;
 }
@@ -170,6 +188,7 @@
 
 .add-filter:hover span {
     text-decoration: underline;
+    text-underline-offset: 2px;
 }
 
 /* ---- route cards ---- */
@@ -188,17 +207,19 @@
     align-items: center;
     justify-content: space-between;
     gap: 8px;
-    padding: 8px 12px;
+    padding: 8px 12px 6px;
     flex: 0 0 auto;
 }
 
 .route-nav .icon-btn--boxed {
-    background: var(--color-bg);
     width: 34px;
     height: 28px;
 }
 
 .route-nav__label {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
     font-size: 12px;
     font-weight: 600;
     color: var(--color-text);
@@ -221,22 +242,28 @@
 }
 
 .route-card {
+    position: relative;
     flex: 0 0 auto;
     padding: 8px 10px;
     border: 1px solid var(--color-border);
-    border-radius: 10px;
+    border-radius: 12px;
     cursor: pointer;
     background: var(--color-bg);
-    transition: border-color 120ms, box-shadow 120ms;
+    transition: border-color 140ms, box-shadow 200ms var(--ease-out), background 200ms;
+    animation: fade-in 280ms var(--ease-out);
 }
 
 .route-card:hover {
     border-color: var(--color-primary);
+    box-shadow: 0 4px 14px -6px var(--color-primary-glow);
 }
 
 .route-card.is-selected {
     border-color: var(--color-primary);
-    box-shadow: 0 0 0 1px var(--color-primary), 0 4px 12px rgba(15, 23, 42, 0.08);
+    background:
+        linear-gradient(180deg, var(--color-primary-light), transparent 70%),
+        var(--color-bg);
+    box-shadow: 0 0 0 1px var(--color-primary), 0 8px 22px -8px var(--color-primary-glow);
 }
 
 .route-card:focus {
@@ -252,20 +279,23 @@
 .route-card__num {
     flex: 0 0 22px;
     height: 22px;
-    border-radius: 11px;
+    border-radius: 7px;
     background: var(--color-surface);
-    font-size: 11px;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
     font-weight: 600;
     display: flex;
     align-items: center;
     justify-content: center;
     color: var(--color-text-muted);
     font-variant-numeric: tabular-nums;
+    transition: background var(--transition-fast), color var(--transition-fast);
 }
 
 .route-card.is-selected .route-card__num {
-    background: var(--color-primary);
-    color: #fff;
+    background: var(--btn-gradient);
+    color: var(--on-primary);
+    box-shadow: 0 2px 6px -1px var(--color-primary-glow);
 }
 
 .route-card__main {
@@ -279,8 +309,18 @@
     white-space: nowrap;
 }
 
+.route-card__main strong,
+.fav-row__main strong {
+    font-family: var(--font-mono);
+    font-weight: 600;
+    letter-spacing: -0.045em;
+    font-variant-numeric: tabular-nums;
+}
+
 .route-card__climb {
-    font-size: 12px;
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    letter-spacing: -0.03em;
     color: var(--color-text-muted);
 }
 
@@ -289,31 +329,34 @@
     gap: 10px;
     margin: 2px 0 0 30px;
     font-size: 11px;
-    color: var(--color-text-muted);
+    color: var(--color-text-faint);
 }
 
 .route-card__details {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
-    gap: 6px 8px;
-    margin: 8px 0 0;
-    padding-top: 8px;
+    gap: 8px;
+    margin: 9px 0 0;
+    padding-top: 9px;
     border-top: 1px solid var(--color-border);
     cursor: default;
+    animation: fade-in 260ms var(--ease-out);
 }
 
 .route-card__details dt {
-    font-size: 10px;
+    font-size: 9.5px;
     font-weight: 600;
-    letter-spacing: 0.04em;
+    letter-spacing: 0.07em;
     text-transform: uppercase;
     color: var(--color-text-muted);
 }
 
 .route-card__details dd {
-    margin: 1px 0 0;
-    font-size: 13px;
-    font-weight: 600;
+    margin: 2px 0 0;
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+    font-weight: 550;
+    letter-spacing: -0.03em;
     color: var(--color-text);
     font-variant-numeric: tabular-nums;
 }
@@ -328,21 +371,42 @@
     display: inline-flex;
     align-items: center;
     gap: 4px;
+    padding: 3px 8px;
+    border-radius: var(--radius-pill);
+    background: var(--color-primary-light);
+}
+
+.route-card__gpx:hover {
+    text-decoration: none;
+    filter: brightness(1.1);
 }
 
 .sparkline {
     flex: 0 0 auto;
+    overflow: visible;
 }
 
 .sparkline__area {
-    fill: var(--color-primary-light, #dbe6f7);
-    opacity: 0.8;
+    fill: var(--color-primary);
+    opacity: 0.14;
 }
 
 .sparkline__line {
     fill: none;
     stroke: var(--color-primary);
-    stroke-width: 1.2;
+    stroke-width: 1.4;
+    stroke-linejoin: round;
+    stroke-linecap: round;
+}
+
+.route-card.is-favorite .sparkline__area,
+.fav-row .sparkline__area {
+    fill: var(--color-favorite);
+}
+
+.route-card.is-favorite .sparkline__line,
+.fav-row .sparkline__line {
+    stroke: var(--color-favorite);
 }
 
 .gen-empty {
@@ -352,6 +416,7 @@
     gap: 6px;
     padding: 12px 4px;
     font-size: 13px;
+    line-height: 1.45;
     color: var(--color-text-muted);
 }
 
@@ -361,7 +426,6 @@
     flex: 0 0 auto;
     padding: 10px 12px 12px;
     border-top: 1px solid var(--color-border);
-    background: var(--color-bg);
 }
 
 .gen-more__options {
@@ -369,6 +433,7 @@
     flex-direction: column;
     gap: 8px;
     margin-bottom: 10px;
+    animation: rise-in 240ms var(--ease-out);
 }
 
 .gen-more__row {
@@ -387,12 +452,15 @@
     height: 36px;
     padding: 0 8px 0 10px;
     border: 1px solid var(--color-border);
-    border-radius: 9px;
+    border-radius: var(--radius-md);
     background: var(--color-bg);
-    font-size: 12px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: -0.03em;
     color: var(--color-text);
     white-space: nowrap;
     cursor: pointer;
+    transition: border-color var(--transition-fast);
 }
 
 .gen-more__settings:hover {
@@ -401,14 +469,16 @@
 
 .gen-more__settings svg {
     color: var(--color-text-muted);
-    transition: transform var(--transition-fast);
+    transition: transform var(--transition-normal);
 }
 
 .gen-more__settings.is-open svg {
     transform: rotate(180deg);
 }
 
+/* Finding routes: a band of light sweeps the bar */
 .busy {
+    position: relative;
     flex: 1 1 auto;
     min-width: 0;
     display: flex;
@@ -416,10 +486,24 @@
     gap: 8px;
     height: 36px;
     padding: 0 12px;
-    border-radius: 9px;
-    background: var(--color-surface);
+    border-radius: var(--radius-md);
+    background: var(--color-primary-light);
     font-size: 13px;
+    font-weight: 500;
     color: var(--color-primary);
+    overflow: hidden;
+}
+
+.busy::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: 40%;
+    background: linear-gradient(100deg, transparent, hsl(var(--hue) 95% 65% / 0.22), transparent);
+    animation: sheen 1.6s ease-in-out infinite;
+    pointer-events: none;
 }
 
 .busy__dot {
@@ -427,6 +511,7 @@
     height: 8px;
     border-radius: 50%;
     background: var(--color-primary);
+    box-shadow: 0 0 8px var(--color-primary-glow);
     animation: pulse-dot 1s infinite;
     flex: 0 0 auto;
 }
@@ -437,6 +522,10 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+
+.busy .link-btn {
+    position: relative;
 }
 
 /* ---- Your loops (plan view) ---- */
@@ -463,16 +552,36 @@
 }
 
 .gen-list__row {
+    position: relative;
     display: flex;
     align-items: center;
     gap: 2px;
     padding-right: 4px;
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     flex: 0 0 auto;
+    transition: background var(--transition-fast);
 }
 
 .gen-list__row:hover {
     background: var(--color-surface);
+}
+
+/* The hovered set: a mark in the theme colour slides in */
+.gen-list__row::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 9px;
+    bottom: 9px;
+    width: 3px;
+    border-radius: 2px;
+    background: var(--color-primary);
+    transform: scaleY(0);
+    transition: transform var(--transition-fast);
+}
+
+.gen-list__row:hover::before {
+    transform: scaleY(1);
 }
 
 .gen-list__open {
@@ -481,7 +590,8 @@
     display: flex;
     flex-direction: column;
     align-items: flex-start;
-    padding: 6px 8px;
+    gap: 1px;
+    padding: 7px 10px;
     border: none;
     background: none;
     text-align: left;
@@ -491,7 +601,7 @@
 .gen-list__name {
     max-width: 100%;
     font-size: 13px;
-    font-weight: 500;
+    font-weight: 550;
     color: var(--color-text);
     overflow: hidden;
     text-overflow: ellipsis;
@@ -512,6 +622,10 @@
     opacity: 1;
 }
 
+.gen-list__delete:hover:not(:disabled) {
+    color: var(--color-danger);
+}
+
 .gen-list__edit {
     flex: 1 1 auto;
     min-width: 0;
@@ -529,13 +643,24 @@
     padding: 4px 6px;
     border: 1px solid var(--color-primary);
     border-radius: 6px;
+    background: var(--color-bg);
+    color: var(--color-text);
     outline: none;
+    box-shadow: 0 0 0 3px var(--color-primary-light);
 }
 
 /* Favorites: the favorite colour is the theme colour's complement (App sets it). */
 .route-card.is-favorite {
     border-color: var(--color-favorite);
     box-shadow: inset 3px 0 0 var(--color-favorite);
+}
+
+.route-card.is-favorite.is-selected {
+    background:
+        linear-gradient(180deg, var(--color-favorite-light), transparent 70%),
+        var(--color-bg);
+    box-shadow: inset 3px 0 0 var(--color-favorite), 0 0 0 1px var(--color-favorite),
+        0 8px 22px -8px hsl(var(--fav-hue) 90% 50% / 0.4);
 }
 
 .route-card__star,
@@ -549,6 +674,7 @@
     border-radius: 6px;
     color: var(--color-text-muted);
     cursor: pointer;
+    transition: background var(--transition-fast), color var(--transition-fast), transform 200ms var(--ease-spring);
 }
 
 .route-card__star {
@@ -563,13 +689,20 @@
 
 .route-card__star:hover,
 .route-nav__star:hover {
-    background: var(--color-surface);
+    background: var(--color-surface-hover);
+    transform: scale(1.15);
+}
+
+.route-card__star:active,
+.route-nav__star:active {
+    transform: scale(0.85);
 }
 
 .route-card__star.is-on,
 .route-nav__star.is-on {
     color: var(--color-favorite);
     opacity: 1;
+    filter: drop-shadow(0 0 5px hsl(var(--fav-hue) 95% 55% / 0.5));
 }
 
 /* GPX download: always at full strength where it shows (the header, the selected favorite). */
@@ -577,29 +710,26 @@
     opacity: 1;
 }
 
-.route-nav__label {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-}
-
 .fav-toggle {
     margin-left: auto;
     display: inline-flex;
     align-items: center;
     gap: 4px;
-    padding: 2px 8px;
+    padding: 3px 9px;
     border: 1px solid var(--color-border);
-    border-radius: 999px;
+    border-radius: var(--radius-pill);
     background: var(--color-bg);
     color: var(--color-text-muted);
     font: inherit;
     font-size: 11px;
+    font-weight: 500;
     cursor: pointer;
+    transition: border-color var(--transition-fast), background var(--transition-fast), color var(--transition-fast);
 }
 
 .fav-toggle:hover {
     border-color: var(--color-favorite);
+    color: var(--color-favorite);
 }
 
 .fav-toggle.is-on {
@@ -610,6 +740,7 @@
 }
 
 .fav-toggle__count {
+    font-family: var(--font-mono);
     font-variant-numeric: tabular-nums;
 }
 
@@ -617,8 +748,8 @@
 .plan-tabs {
     display: flex;
     gap: 2px;
-    padding: 2px;
-    border-radius: 8px;
+    padding: 3px;
+    border-radius: var(--radius-md);
     background: var(--color-surface);
 }
 
@@ -627,28 +758,44 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    gap: 5px;
+    gap: 6px;
     padding: 5px 8px;
     border: none;
-    border-radius: 6px;
+    border-radius: 7px;
     background: none;
     font: inherit;
     font-size: 12px;
     font-weight: 600;
     color: var(--color-text-muted);
     cursor: pointer;
+    transition: background var(--transition-fast), color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.plan-tabs button:hover:not(.is-active) {
+    color: var(--color-text);
 }
 
 .plan-tabs button.is-active {
     background: var(--color-bg);
     color: var(--color-text);
-    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.1);
+    box-shadow: var(--shadow-raised);
 }
 
 .plan-tabs__count {
+    min-width: 18px;
+    padding: 1px 5px;
+    border-radius: var(--radius-pill);
+    background: var(--color-surface-hover);
+    font-family: var(--font-mono);
+    font-size: 10px;
     font-weight: 500;
     font-variant-numeric: tabular-nums;
     color: var(--color-text-muted);
+}
+
+.plan-tabs button.is-active .plan-tabs__count {
+    background: var(--color-primary-light);
+    color: var(--color-primary);
 }
 
 /* Favorites tab: every favorite, grouped by start */
@@ -659,9 +806,9 @@
     overscroll-behavior: contain;
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 10px;
     margin: 0 -4px;
-    padding: 0 4px;
+    padding: 0 4px 2px;
 }
 
 .fav-list__empty {
@@ -672,7 +819,7 @@
     display: flex;
     align-items: center;
     gap: 6px;
-    padding: 2px 2px 4px;
+    padding: 2px 2px 5px;
 }
 
 .fav-group__title {
@@ -686,7 +833,8 @@
 }
 
 .fav-group__count {
-    font-size: 11px;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
     color: var(--color-text-muted);
 }
 
@@ -711,11 +859,12 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 6px 8px;
+    padding: 6px 8px 6px 10px;
     border: 1px solid var(--color-border);
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     cursor: pointer;
     background: var(--color-bg);
+    transition: border-color var(--transition-fast), background var(--transition-fast), box-shadow var(--transition-fast);
 }
 
 .fav-row:hover {
@@ -725,7 +874,7 @@
 .fav-row.is-selected {
     border-color: var(--color-favorite);
     box-shadow: inset 3px 0 0 var(--color-favorite);
-    background: var(--color-favorite-light);
+    background: linear-gradient(0deg, var(--color-favorite-light), var(--color-favorite-light)), var(--color-bg);
 }
 
 .fav-row__main {
@@ -737,7 +886,9 @@
 }
 
 .fav-row__climb {
+    font-family: var(--font-mono);
     font-size: 11px;
+    letter-spacing: -0.03em;
     color: var(--color-text-muted);
 }
 

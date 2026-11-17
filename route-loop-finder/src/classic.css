@@ -1,0 +1,563 @@
+/* ==========================================================================
+   The Classic style (<html data-style="classic">, Display options > Style):
+   the same app and features, drawn plainly. Solid panels in place of frosted
+   glass, the system font, flat buttons, soft plain shadows, and none of the
+   decorative motion (sheens, glows, pings, entry animations). The Modern
+   style is what the component stylesheets say; this file only takes away.
+
+   Most of it is tokens: the components read their colours, shadows and fonts
+   from index.css, so swapping those restyles nearly everything.
+   ========================================================================== */
+
+/* ---- tokens: light ---- */
+html:root[data-style='classic'] {
+  --font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+  --font-mono: var(--font-family); /* numbers in the same face (still tabular) */
+
+  --radius-md: 8px;
+  --radius-lg: 10px;
+  --radius-xl: 14px;
+
+  --ease-spring: ease;
+  --glass-blur: none;
+
+  --color-bg: #ffffff;
+  --color-surface: #f1f4f8;
+  --color-surface-hover: #e6eaf0;
+  --color-border: #dfe3e8;
+  --color-border-strong: #c5ccd6;
+  --color-text: #1a2332;
+  --color-text-muted: #697a8d;
+  --color-text-faint: #94a3b8;
+
+  --color-primary: hsl(var(--hue) 65% 48%);
+  --color-primary-dark: hsl(var(--hue) 65% 40%);
+  --color-primary-light: hsl(var(--hue) 65% 93%);
+  --color-primary-glow: transparent;
+  --color-accent: hsl(var(--hue) 70% 60%);
+  --on-primary: #ffffff;
+  --btn-gradient: var(--color-primary);
+
+  --color-favorite: hsl(var(--fav-hue) 75% 42%);
+  --color-favorite-light: hsl(var(--fav-hue) 80% 93%);
+
+  --glass: #ffffff;
+  --glass-solid: #ffffff;
+  --glass-edge: transparent;
+  --menu-bg: #ffffff;
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.16);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.16);
+  --shadow-lg: 0 10px 30px rgba(15, 23, 42, 0.18), 0 1px 3px rgba(15, 23, 42, 0.08);
+  --shadow-raised: 0 1px 2px rgba(15, 23, 42, 0.14);
+
+  --toast-bg: rgba(15, 23, 42, 0.88);
+  --toast-text: #ffffff;
+  --toast-link: #93c5fd;
+
+  --pin-active: hsl(var(--hue) 65% 30%);
+  --map-bg: #dde1e6;
+  --chart-gap: #ffffff;
+}
+
+/* ---- tokens: dark ---- */
+html:root[data-style='classic'][data-theme='dark'] {
+  --color-bg: #262d38;
+  --color-surface: rgba(255, 255, 255, 0.06);
+  --color-surface-hover: rgba(255, 255, 255, 0.11);
+  --color-border: rgba(255, 255, 255, 0.1);
+  --color-border-strong: rgba(255, 255, 255, 0.2);
+  --color-text: #e8ecf1;
+  --color-text-muted: #9ba8b9;
+  --color-text-faint: #6b7889;
+
+  --color-primary: hsl(var(--hue) 78% 64%);
+  --color-primary-dark: hsl(var(--hue) 82% 72%);
+  --color-primary-light: hsl(var(--hue) 70% 60% / 0.2);
+  --color-accent: hsl(var(--hue) 80% 70%);
+  --on-primary: #ffffff;
+  --btn-gradient: hsl(var(--hue) 70% 50%);
+
+  --color-favorite: hsl(var(--fav-hue) 90% 62%);
+  --color-favorite-light: hsl(var(--fav-hue) 80% 60% / 0.16);
+
+  --glass: #1a2029;
+  --glass-solid: #1a2029;
+  --menu-bg: #212833;
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.5);
+  --shadow-md: 0 4px 14px rgba(0, 0, 0, 0.55);
+  --shadow-lg: 0 10px 30px rgba(0, 0, 0, 0.6);
+  --shadow-raised: 0 0 0 1px rgba(255, 255, 255, 0.07), 0 1px 2px rgba(0, 0, 0, 0.4);
+
+  --toast-bg: rgba(232, 236, 241, 0.94);
+  --toast-text: #1a2332;
+  --toast-link: hsl(var(--hue) 70% 42%);
+
+  --pin-active: hsl(var(--hue) 85% 70%);
+  --map-bg: #12161c;
+  --chart-gap: #1a2029;
+}
+
+/* ---- no decorative motion ---- */
+
+[data-style='classic'] .control-panel,
+[data-style='classic'] .advanced,
+[data-style='classic'] .gen-panel,
+[data-style='classic'] .route-card,
+[data-style='classic'] .route-card__details,
+[data-style='classic'] .gen-settings,
+[data-style='classic'] .gen-more__options,
+[data-style='classic'] .map-view__status,
+[data-style='classic'] .map-view__generating,
+[data-style='classic'] .quick-actions__theme-icon,
+[data-style='classic'] .custom-marker-icon--pending svg,
+[data-style='classic'] .shortcuts,
+[data-style='classic'] .shortcuts__sheet,
+[data-style='classic'] .elevation-toggle-btn,
+[data-style='classic'] .undo-toast {
+  animation: none;
+}
+
+[data-style='classic'] .control-panel::before,
+[data-style='classic'] .btn-primary::after,
+[data-style='classic'] .busy::before,
+[data-style='classic'] .area-status::after,
+[data-style='classic'] .area-status__dot::after,
+[data-style='classic'] .custom-marker-icon--pending::before,
+[data-style='classic'] .custom-marker-icon--pending::after,
+[data-style='classic'] .gen-list__row::before {
+  display: none;
+}
+
+[data-style='classic'] .custom-marker-icon:hover svg,
+[data-style='classic'] .route-card__star:hover,
+[data-style='classic'] .route-nav__star:hover,
+[data-style='classic'] .route-card__star:active,
+[data-style='classic'] .route-nav__star:active,
+[data-style='classic'] .hue-swatch:hover,
+[data-style='classic'] .icon-btn:active:not(:disabled),
+[data-style='classic'] .tools__btn:active:not(:disabled),
+[data-style='classic'] .panel-footer-btn:hover svg:last-child {
+  transform: none;
+}
+
+/* ---- the panel ---- */
+
+[data-style='classic'] .control-panel {
+  box-shadow: var(--shadow-lg);
+}
+
+[data-style='classic'] .brand-mark,
+[data-style='classic'] .btn-primary--big svg,
+[data-style='classic'] .btn-primary__keys {
+  display: none;
+}
+
+[data-style='classic'] .panel-top {
+  padding: 12px 10px 4px 16px;
+}
+
+[data-style='classic'] .panel-title,
+[data-style='classic'] .gen-panel__name {
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+[data-style='classic'] .gen-panel__name:hover {
+  color: var(--color-text);
+}
+
+[data-style='classic'] .section-label,
+[data-style='classic'] .view-options__title,
+[data-style='classic'] .set-menu__title {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+}
+
+[data-style='classic'] .field-value,
+[data-style='classic'] .filter__value,
+[data-style='classic'] .filter__note,
+[data-style='classic'] .route-card__main strong,
+[data-style='classic'] .fav-row__main strong,
+[data-style='classic'] .route-card__climb,
+[data-style='classic'] .fav-row__climb,
+[data-style='classic'] .route-card__details dd,
+[data-style='classic'] .gen-more__settings,
+[data-style='classic'] .elevation-window__summary,
+[data-style='classic'] .elevation-window__summary strong,
+[data-style='classic'] .elevation-window__stat-value,
+[data-style='classic'] .elevation-window__chart-container text {
+  letter-spacing: normal;
+}
+
+[data-style='classic'] .field-value--big {
+  font-size: 16px;
+}
+
+[data-style='classic'] .gen-more__settings {
+  font-size: 12px;
+}
+
+/* Flat buttons */
+[data-style='classic'] .btn-primary,
+[data-style='classic'] .btn-primary:hover:not(:disabled) {
+  box-shadow: none;
+  transform: none;
+  filter: none;
+}
+
+[data-style='classic'] .btn-primary {
+  border-radius: 9px;
+  transition: background var(--transition-fast);
+}
+
+[data-style='classic'] .btn-primary:hover:not(:disabled) {
+  background: var(--color-primary-dark);
+}
+
+[data-style='classic'][data-theme='dark'] .btn-primary:hover:not(:disabled) {
+  background: hsl(var(--hue) 70% 56%);
+}
+
+[data-style='classic'] .btn-primary:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+[data-style='classic'] .btn-primary:disabled {
+  background: var(--color-primary);
+  color: var(--on-primary);
+  opacity: 0.45;
+}
+
+[data-style='classic'][data-theme='dark'] .btn-primary:disabled {
+  background: hsl(var(--hue) 70% 50%);
+}
+
+[data-style='classic'] .btn-primary--big {
+  height: 42px;
+  border-radius: 9px;
+}
+
+[data-style='classic'] .icon-btn--boxed {
+  box-shadow: none;
+  border: 1px solid var(--color-border);
+}
+
+[data-style='classic'] .icon-btn--boxed:hover:not(:disabled) {
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+
+[data-style='classic'] .tools__btn.is-active,
+[data-style='classic'] .route-card.is-selected .route-card__num {
+  box-shadow: none;
+}
+
+[data-style='classic'] .tools__mode.is-through button.is-active {
+  background: #16a34a;
+  box-shadow: none;
+}
+
+[data-style='classic'] .tools__mode.is-avoid button.is-active {
+  background: #dc2626;
+  box-shadow: none;
+}
+
+[data-style='classic'] .dual-slider__fill {
+  background: var(--color-primary);
+  box-shadow: none;
+}
+
+[data-style='classic'] .view-option__switch input:checked + span {
+  box-shadow: none;
+}
+
+[data-style='classic'] .select:focus,
+[data-style='classic'] .setting-item input:focus,
+[data-style='classic'] .setting-item select:focus,
+[data-style='classic'] .search-area__row select:focus,
+[data-style='classic'] .boundary-editor__name input:focus,
+[data-style='classic'] .gen-panel__name-input,
+[data-style='classic'] .gen-list__input {
+  box-shadow: none;
+}
+
+/* The start's status: a plain tinted box */
+[data-style='classic'] .area-status,
+[data-style='classic'] .area-status--none {
+  padding: 8px 10px;
+  border-radius: 9px;
+  background: var(--color-surface);
+  box-shadow: none;
+}
+
+[data-style='classic'] .area-status::before {
+  display: none;
+}
+
+[data-style='classic'] .area-status--checking .area-status__dot,
+[data-style='classic'] .area-status--download .area-status__dot,
+[data-style='classic'] .area-status--build .area-status__dot,
+[data-style='classic'] .area-status--queue .area-status__dot {
+  animation: pulse-dot 1s infinite;
+}
+
+/* ---- route cards and lists ---- */
+
+[data-style='classic'] .route-card {
+  border-radius: 10px;
+}
+
+[data-style='classic'] .route-card:hover {
+  box-shadow: none;
+}
+
+[data-style='classic'] .route-card.is-selected {
+  background: var(--color-bg);
+  box-shadow: 0 0 0 1px var(--color-primary);
+}
+
+[data-style='classic'] .route-card.is-favorite {
+  box-shadow: inset 3px 0 0 var(--color-favorite);
+}
+
+[data-style='classic'] .route-card.is-favorite.is-selected {
+  background: var(--color-bg);
+  box-shadow: inset 3px 0 0 var(--color-favorite), 0 0 0 1px var(--color-favorite);
+}
+
+[data-style='classic'] .route-card__num {
+  border-radius: 11px;
+}
+
+[data-style='classic'] .route-card__star.is-on,
+[data-style='classic'] .route-nav__star.is-on {
+  filter: none;
+}
+
+[data-style='classic'] .route-card__gpx {
+  padding: 0;
+  background: none;
+}
+
+[data-style='classic'] .route-card__gpx:hover {
+  text-decoration: underline;
+  filter: none;
+}
+
+[data-style='classic'] .busy {
+  background: var(--color-surface);
+  font-weight: 400;
+}
+
+[data-style='classic'] .busy__dot {
+  box-shadow: none;
+}
+
+[data-style='classic'] .plan-tabs__count,
+[data-style='classic'] .plan-tabs button.is-active .plan-tabs__count {
+  min-width: 0;
+  padding: 0;
+  background: none;
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+[data-style='classic'] .fav-row.is-selected {
+  background: var(--color-favorite-light);
+}
+
+/* ---- on the map ---- */
+
+[data-style='classic'] .map-view__status,
+[data-style='classic'] .map-tile-switcher__button,
+[data-style='classic'] .quick-actions,
+[data-style='classic'] .search-box__bar,
+[data-style='classic'] .map-view .leaflet-top.leaflet-left .leaflet-control-zoom {
+  border-radius: 8px;
+}
+
+[data-style='classic'] .map-tile-switcher__menu,
+[data-style='classic'] .search-box__results {
+  border-radius: 8px;
+}
+
+[data-style='classic'] .search-box--open .search-box__bar:focus-within {
+  box-shadow: var(--shadow-md);
+}
+
+[data-style='classic'] .search-box:hover .search-box__icon,
+[data-style='classic'] .search-box--open .search-box__icon,
+[data-style='classic'] .map-tile-switcher:hover .map-tile-switcher__button {
+  color: var(--color-text);
+}
+
+[data-style='classic'] .search-box__result.is-active {
+  background: var(--color-surface);
+}
+
+[data-style='classic'] .map-view__status-dot--connected,
+[data-style='classic'] .map-view__status-dot--disconnected {
+  box-shadow: none;
+}
+
+/* Finding routes: the plain pulsing dot */
+[data-style='classic'] .map-view__generating .map-view__status-dot {
+  width: 8px;
+  height: 8px;
+  background: var(--color-accent);
+  -webkit-mask: none;
+  mask: none;
+  animation: pulse 1s infinite;
+}
+
+[data-style='classic'] .map-view__stop-btn {
+  box-shadow: none;
+}
+
+[data-style='classic'] .map-view__hint {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  border-radius: 10px;
+  box-shadow: none;
+  font-weight: 400;
+  transform: translate(-50%, -6px);
+}
+
+[data-style='classic'] .map-view__hint--visible {
+  transform: translate(-50%, 0);
+}
+
+[data-style='classic'] .map-view .leaflet-control-attribution {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  background: var(--glass);
+  opacity: 0.85;
+}
+
+[data-style='classic'] .custom-marker-icon {
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.35));
+}
+
+[data-style='classic'] .shortcuts {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  background: rgba(15, 23, 42, 0.4);
+}
+
+[data-style='classic'] .shortcuts__sheet {
+  border-radius: 14px;
+}
+
+[data-style='classic'] .shortcuts__head {
+  background: none;
+}
+
+[data-style='classic'] .shortcuts__group h3 {
+  color: var(--color-text-muted);
+}
+
+/* ---- elevation chart: a sheet attached to the bottom edge ---- */
+
+[data-style='classic'] .elevation-window {
+  bottom: 0;
+  border-radius: 14px 14px 0 0;
+  box-shadow: 0 -4px 24px rgba(15, 23, 42, 0.14);
+  padding: 10px 14px 6px;
+}
+
+[data-style='classic'][data-theme='dark'] .elevation-window {
+  box-shadow: 0 -4px 24px rgba(0, 0, 0, 0.5);
+}
+
+[data-style='classic'] .elevation-window__header h3 {
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: normal;
+  text-transform: none;
+  color: var(--color-text);
+}
+
+[data-style='classic'] .elevation-window__stats {
+  gap: 14px;
+}
+
+[data-style='classic'] .elevation-window__stat {
+  padding: 0;
+  background: none;
+}
+
+[data-style='classic'] .elevation-window__stat-value {
+  text-align: left;
+}
+
+[data-style='classic'] .elevation-window__summary,
+[data-style='classic'] .elevation-window__summary strong {
+  font-size: 12px;
+  color: var(--color-text);
+}
+
+[data-style='classic'] .elevation-window__summary.is-part,
+[data-style='classic'] .elevation-window__summary.is-part strong {
+  color: var(--color-primary);
+}
+
+[data-style='classic'] .elevation-window__flip-btn {
+  height: 26px;
+  padding: 0 8px;
+  border-radius: 7px;
+}
+
+[data-style='classic'] .elevation-window__flip-btn:hover {
+  color: var(--color-text);
+}
+
+[data-style='classic'] .elevation-window__flip-btn.active {
+  border-color: var(--color-primary);
+  box-shadow: none;
+  color: var(--on-primary);
+}
+
+[data-style='classic'] .elevation-window__line {
+  filter: none;
+}
+
+[data-style='classic'] .elevation-window__grade-key {
+  padding-left: 48px;
+}
+
+[data-style='classic'] .elevation-toggle-btn {
+  border: 1px solid var(--color-border);
+  box-shadow: var(--shadow-md);
+  font-weight: 500;
+}
+
+[data-style='classic'] .elevation-toggle-btn svg {
+  color: inherit;
+}
+
+[data-style='classic'] .elevation-toggle-btn:hover {
+  transform: translateX(-50%);
+  color: var(--color-text);
+  box-shadow: var(--shadow-md);
+}
+
+/* ---- undo toast ---- */
+
+[data-style='classic'] .undo-toast {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  border-radius: 8px;
+  padding: 10px 14px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
+}
+
+[data-style='classic'] .undo-toast::after {
+  display: none;
+}
+
+[data-style='classic'] .undo-toast button,
+[data-style='classic'] .undo-toast button:hover {
+  padding: 0;
+  background: none;
+}

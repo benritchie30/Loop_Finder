@@ -269,6 +269,8 @@ def main():
 
     rf.path_to_geojson = keep_path
 
+    import tree_kernel
+    tree_kernel.warm_up()  # loading the compiled loops is not part of any strategy's time
     names = list(SCENARIOS) if args.scen == ['all'] else args.scen
     out_dir = os.path.join(BACKEND, 'bench_out')
     for name in names:

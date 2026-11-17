@@ -1,30 +1,69 @@
 .map-view {
+    --rail-left: 16px;
+    --rail-top: 16px;
     height: 100%;
     width: 100%;
     position: relative;
 }
 
+/* The map itself is dark (dimmed tiles, the dark road network, satellite):
+   the shown route's white casing glows a little. */
+.map-view--dark .leaflet-routeCasing-pane path {
+    filter: drop-shadow(0 0 5px rgba(255, 255, 255, 0.55));
+}
+
+
 .map-view .leaflet-container {
     height: 100%;
     width: 100%;
     z-index: 1;
+    background: var(--map-bg);
+    font-family: var(--font-family);
+}
+
+/* Dark appearance: the internet tiles are inverted and calmed down, so the
+   map sits behind the dark panels instead of glaring through them. Only the
+   tile pane: routes, pins and tools keep their own colours. */
+.map-view--dim-tiles .leaflet-tile-pane {
+    filter: invert(1) hue-rotate(180deg) brightness(1.15) contrast(0.86) saturate(0.55);
+}
+
+.map-view .leaflet-tile-pane {
+    transition: filter 400ms var(--ease-out);
+}
+
+/* ---- floating controls: one look for everything on the map ---- */
+
+.map-view__status,
+.map-view__generating,
+.map-view__goto-data,
+.map-tile-switcher__button,
+.map-tile-switcher__menu,
+.quick-actions,
+.map-view .leaflet-control-zoom {
+    background: var(--glass);
+    -webkit-backdrop-filter: var(--glass-blur);
+    backdrop-filter: var(--glass-blur);
+    box-shadow: var(--shadow-sm), inset 0 1px 0 var(--glass-edge);
+    color: var(--color-text);
 }
 
 /* Status indicator */
 .map-view__status {
     position: absolute;
-    top: 10px;
-    left: 56px;
+    top: var(--rail-top);
+    left: calc(var(--rail-left) + 52px);
     z-index: 1000;
     display: flex;
     align-items: center;
     gap: var(--space-sm);
-    padding: var(--space-sm) var(--space-md);
-    background: var(--color-bg);
-    border-radius: var(--radius-md);
-    box-shadow: var(--shadow-sm);
-    font-size: var(--font-size-sm);
+    height: 40px;
+    padding: 0 14px;
+    border-radius: 12px;
+    font-size: 12.5px;
+    font-weight: 500;
     color: var(--color-text-muted);
+    animation: pop-in 300ms var(--ease-out);
 }
 
 .map-view__status-dot {
@@ -35,11 +74,14 @@
 }
 
 .map-view__status-dot--connected {
-    background: #2e7d32;
+    background: var(--color-ok-solid);
+    box-shadow: 0 0 0 3px hsl(142 70% 45% / 0.2);
 }
 
 .map-view__status-dot--disconnected {
-    background: #d32f2f;
+    background: var(--color-danger-solid);
+    box-shadow: 0 0 0 3px hsl(0 80% 55% / 0.2);
+    animation: pulse 1.2s infinite;
 }
 
 .map-view__status-dot--connecting {
@@ -48,66 +90,83 @@
 }
 
 @keyframes pulse {
-
-    0%,
-    100% {
-        opacity: 1;
-    }
-
-    50% {
-        opacity: 0.5;
-    }
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
 }
 
 /* Generation in progress: top centre of the map area (left of the panel) */
 .map-view__generating {
     position: absolute;
     top: 16px;
-    left: calc((100% - 376px) / 2);
+    left: calc((100% - var(--panel-space)) / 2);
     transform: translateX(-50%);
     z-index: 1000;
     display: flex;
     align-items: center;
-    gap: var(--space-sm);
-    padding: 4px 4px 4px 14px;
-    background: var(--color-bg);
-    border-radius: 999px;
-    box-shadow: 0 4px 14px rgba(15, 23, 42, 0.15);
+    gap: 10px;
+    padding: 5px 5px 5px 14px;
+    border-radius: var(--radius-pill);
     font-size: 13px;
-    color: var(--color-text);
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
     white-space: nowrap;
+    animation: generating-in 380ms var(--ease-spring);
+}
+
+@keyframes generating-in {
+    from { opacity: 0; transform: translateX(-50%) translateY(-10px) scale(0.94); }
+    to { opacity: 1; transform: translateX(-50%); }
+}
+
+/* A turning ring in the theme colour */
+.map-view__generating .map-view__status-dot {
+    width: 16px;
+    height: 16px;
+    background: conic-gradient(from 0deg, transparent 10%, var(--color-primary));
+    -webkit-mask: radial-gradient(circle, transparent 5px, #000 5.5px);
+    mask: radial-gradient(circle, transparent 5px, #000 5.5px);
+    animation: spin 0.9s linear infinite;
 }
 
 .map-view__stop-btn {
-    padding: 5px 12px;
-    background: #dc2626;
+    padding: 6px 13px;
+    background: var(--color-danger-solid);
     color: white;
     border: none;
-    border-radius: 999px;
+    border-radius: var(--radius-pill);
     font-size: 12px;
     font-weight: 600;
     cursor: pointer;
-    transition: background-color var(--transition-fast);
+    box-shadow: inset 0 1px 0 hsl(0 0% 100% / 0.22), 0 3px 10px -2px hsl(0 80% 50% / 0.5);
+    transition: filter var(--transition-fast), transform var(--transition-fast);
 }
 
 .map-view__stop-btn:hover {
-    background: #b91c1c;
+    filter: brightness(1.1);
+}
+
+.map-view__stop-btn:active {
+    transform: scale(0.95);
 }
 
 /* What the active tool does: top centre of the map area */
 .map-view__hint {
     position: absolute;
     top: 16px;
-    left: calc((100% - 376px) / 2);
-    transform: translate(-50%, -6px);
+    left: calc((100% - var(--panel-space)) / 2);
+    transform: translate(-50%, -8px) scale(0.98);
     z-index: 1000;
-    max-width: min(640px, calc(100% - 376px - 120px));
-    padding: 8px 14px;
-    background: rgba(15, 23, 42, 0.84);
-    color: white;
-    border-radius: 10px;
-    font-size: 13px;
-    line-height: 1.35;
+    max-width: min(640px, calc(100% - var(--panel-space) - 150px));
+    padding: 9px 16px;
+    background: var(--toast-bg);
+    -webkit-backdrop-filter: blur(14px) saturate(1.5);
+    backdrop-filter: blur(14px) saturate(1.5);
+    color: var(--toast-text);
+    border-radius: 12px;
+    box-shadow: 0 10px 30px -8px hsl(0 0% 0% / 0.4);
+    font-size: 12.5px;
+    font-weight: 500;
+    line-height: 1.4;
     text-align: center;
     pointer-events: none;
     opacity: 0;
@@ -121,7 +180,16 @@
 
 /* Below the "Generating…" pill */
 .map-view__hint--low {
-    top: 64px;
+    top: 66px;
+}
+
+/* Classic style arrows: a glow in the map's opposite tone */
+.direction-arrow__inner--glow {
+    filter: drop-shadow(0 0 2px rgba(255, 255, 255, 0.9));
+}
+
+.map-view--dark .direction-arrow__inner--glow {
+    filter: drop-shadow(0 0 2px rgba(4, 8, 14, 0.9));
 }
 
 /* Direction arrows along active path */
@@ -134,104 +202,240 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    filter: drop-shadow(0 0 2px rgba(255, 255, 255, 0.9));
 }
 
 /* Map Tile Switcher */
 .map-tile-switcher {
     position: absolute;
-    top: calc(var(--space-md) + 48px); /* under the search icon */
-    left: var(--space-md);
+    top: calc(var(--rail-top) + 48px); /* under the search icon */
+    left: var(--rail-left);
     z-index: 1000;
 }
 
-.map-tile-switcher__button {
+.map-tile-switcher__button,
+.quick-actions__btn {
     width: 40px;
     height: 40px;
-    background: var(--color-bg);
-    border-radius: var(--radius-md);
-    box-shadow: var(--shadow-sm);
     display: flex;
     align-items: center;
     justify-content: center;
     cursor: pointer;
     color: var(--color-text);
-    transition: background-color var(--transition-fast);
+    transition: color var(--transition-fast), background var(--transition-fast), transform var(--transition-fast);
 }
 
-.map-tile-switcher__button:hover {
-    background-color: var(--color-bg-hover);
+.map-tile-switcher__button {
+    border-radius: 12px;
+}
+
+.map-tile-switcher:hover .map-tile-switcher__button,
+.quick-actions__btn:hover {
+    color: var(--color-primary);
 }
 
 .map-tile-switcher__menu {
     position: absolute;
     top: 0;
-    left: 44px;
-    background: var(--color-bg);
-    border-radius: var(--radius-md);
-    box-shadow: var(--shadow-md);
-    padding: var(--space-xs);
-    width: 200px;
-    animation: fadeIn 0.2s ease-out;
+    left: 48px;
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-md), inset 0 1px 0 var(--glass-edge);
+    padding: 5px;
+    width: 216px;
+    transform-origin: top left;
+    animation: pop-in 180ms var(--ease-out);
 }
 
 .map-tile-switcher__menu::before {
     content: '';
     position: absolute;
     top: 0;
-    left: -8px;
-    width: 8px;
+    left: -10px;
+    width: 10px;
     height: 100%;
 }
 
 .map-tile-switcher__option {
     display: flex;
     align-items: center;
-    gap: var(--space-sm);
-    padding: var(--space-sm);
+    gap: 10px;
+    padding: 6px 8px;
     cursor: pointer;
     border-radius: var(--radius-sm);
-    transition: background-color var(--transition-fast);
+    font-size: 13px;
+    font-weight: 500;
+    transition: background-color var(--transition-fast), color var(--transition-fast);
 }
 
 .map-tile-switcher__option:hover {
-    background-color: var(--color-bg-hover);
+    background-color: var(--color-surface);
 }
 
 .map-tile-switcher__option.active {
     background-color: var(--color-primary-light);
     color: var(--color-primary);
-    font-weight: var(--font-weight-medium);
+    font-weight: 600;
 }
 
+.map-tile-switcher__check {
+    margin-left: auto;
+}
+
+/* A tiny picture of each basemap */
 .map-tile-switcher__preview {
-    width: 24px;
-    height: 24px;
-    border-radius: 4px;
-    border: 1px solid var(--color-border);
+    flex: 0 0 auto;
+    width: 30px;
+    height: 30px;
+    border-radius: 8px;
+    box-shadow: inset 0 0 0 1px hsl(0 0% 0% / 0.12);
+    background-color: #e9ecef;
+}
+
+.map-tile-switcher__option.active .map-tile-switcher__preview {
+    box-shadow: 0 0 0 2px var(--color-primary);
 }
 
 .map-tile-switcher__preview--offline {
-    background: repeating-linear-gradient(45deg, #f4f4f0, #f4f4f0 4px, #c9ced4 4px, #c9ced4 6px);
+    background:
+        linear-gradient(115deg, transparent 46%, #9aa3ad 46%, #9aa3ad 54%, transparent 54%),
+        linear-gradient(20deg, transparent 47%, #b4bbc4 47%, #b4bbc4 53%, transparent 53%),
+        #fcfbf7;
+}
+
+.map-tile-switcher__preview--osm {
+    background:
+        linear-gradient(115deg, transparent 45%, #f7c873 45%, #f7c873 55%, transparent 55%),
+        linear-gradient(20deg, transparent 47%, #ffffff 47%, #ffffff 53%, transparent 53%),
+        radial-gradient(circle at 80% 20%, #c6e2b0 0 30%, transparent 31%),
+        #f2efe9;
+}
+
+.map-tile-switcher__preview--osmCycle {
+    background:
+        linear-gradient(115deg, transparent 45%, #3b6fd6 45%, #3b6fd6 55%, transparent 55%),
+        linear-gradient(20deg, transparent 47%, #e06a5f 47%, #e06a5f 53%, transparent 53%),
+        #eef3e6;
+}
+
+.map-tile-switcher__preview--esriTopo {
+    background:
+        repeating-radial-gradient(circle at 30% 70%, transparent 0 4px, #c9b48a 4px 5px),
+        #e8ecd9;
+}
+
+.map-tile-switcher__preview--usgs {
+    background:
+        repeating-radial-gradient(circle at 70% 30%, transparent 0 3px, #b08d57 3px 4px),
+        #f1ead8;
+}
+
+.map-tile-switcher__preview--satellite {
+    background:
+        radial-gradient(circle at 70% 30%, #5c7f4a 0 28%, transparent 29%),
+        radial-gradient(circle at 25% 75%, #2b4a5e 0 30%, transparent 31%),
+        linear-gradient(135deg, #2f4a2c, #4a5a35);
+}
+
+/* Appearance and keyboard help, under the zoom buttons */
+.quick-actions {
+    position: absolute;
+    top: calc(var(--rail-top) + 96px + 80px + 8px); /* under search, layers and zoom */
+    left: var(--rail-left);
+    z-index: 1000;
+    display: flex;
+    flex-direction: column;
+    border-radius: 12px;
+    overflow: hidden;
+}
+
+.quick-actions__btn + .quick-actions__btn {
+    border-top: 1px solid var(--color-border);
+}
+
+.quick-actions__btn:hover {
+    background: var(--color-surface);
+}
+
+.quick-actions__btn:active svg {
+    transform: scale(0.85);
+}
+
+.quick-actions__btn svg {
+    transition: transform 300ms var(--ease-spring);
+}
+
+/* Sun and moon trade places with a turn */
+.quick-actions__theme-icon {
+    animation: theme-icon-in 480ms var(--ease-spring);
+}
+
+@keyframes theme-icon-in {
+    from { opacity: 0; transform: rotate(-90deg) scale(0.5); }
+    to { opacity: 1; transform: none; }
+}
+
+/* Leaflet's zoom buttons, in the rail under the layers button */
+.map-view .leaflet-top.leaflet-left .leaflet-control-zoom {
+    margin: calc(var(--rail-top) + 96px) 0 0 var(--rail-left);
+    border: none;
+    border-radius: 12px;
+    overflow: hidden;
+}
+
+.map-view .leaflet-control-zoom a {
+    box-sizing: border-box;
+    width: 40px;
+    height: 40px;
+    line-height: 40px;
+    background: transparent;
+    color: var(--color-text);
+    border-bottom: 1px solid var(--color-border);
+    font: 300 20px/38px var(--font-family);
+    transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.map-view .leaflet-control-zoom a:last-child {
+    border-bottom: none;
+}
+
+.map-view .leaflet-control-zoom a:hover {
+    background: var(--color-surface);
+    color: var(--color-primary);
+}
+
+.map-view .leaflet-control-zoom a.leaflet-disabled {
+    background: transparent;
+    color: var(--color-text-faint);
+}
+
+.map-view .leaflet-control-attribution {
+    padding: 2px 8px;
+    border-radius: 8px 0 0 0;
+    background: var(--glass);
+    -webkit-backdrop-filter: blur(8px);
+    backdrop-filter: blur(8px);
+    color: var(--color-text-faint);
+    font-size: 10px;
+}
+
+.map-view .leaflet-control-attribution a {
+    color: var(--color-text-muted);
 }
 
 /* Offline basemap: grey where no map data is downloaded; the downloaded
    tiles are drawn light (OfflineBasemap) with their roads. */
 .map-view--offline .leaflet-container {
-    background: #e4e2db;
+    background: var(--map-offline-bg);
 }
 
 /* Offline, with no downloaded map data in view */
 .map-view__goto-data {
     position: absolute;
     bottom: 28px;
-    left: calc((100% - 376px) / 2);
+    left: calc((100% - var(--panel-space)) / 2);
     transform: translateX(-50%);
     z-index: 1000;
-    padding: 9px 16px;
-    border-radius: 999px;
-    background: var(--color-bg);
-    box-shadow: 0 4px 14px rgba(15, 23, 42, 0.18);
+    padding: 10px 18px;
+    border-radius: var(--radius-pill);
     font-size: 13px;
     color: var(--color-text-muted);
     white-space: nowrap;
@@ -245,36 +449,7 @@
 
 .map-view__goto-data:hover strong {
     text-decoration: underline;
-}
-
-.map-tile-switcher__preview--light {
-    background: #f0f0f0;
-}
-
-.map-tile-switcher__preview--dark {
-    background: #222;
-}
-
-.map-tile-switcher__preview--street {
-    background: #e0e0e0;
-    background-image: linear-gradient(45deg, #ccc 25%, transparent 25%), linear-gradient(-45deg, #ccc 25%, transparent 25%);
-    background-size: 8px 8px;
-}
-
-.map-tile-switcher__preview--satellite {
-    background: #388e3c;
-}
-
-@keyframes fadeIn {
-    from {
-        opacity: 0;
-        transform: translateY(-5px);
-    }
-
-    to {
-        opacity: 1;
-        transform: translateY(0);
-    }
+    text-underline-offset: 2px;
 }
 
 .leaflet-container.route-tool-active,
@@ -282,11 +457,82 @@
     cursor: crosshair;
 }
 
-/* Route count on a generation's pin */
+/* ---- pins ---- */
+
 .custom-marker-icon {
-    position: relative;
+    --pin-fill: var(--pin-inactive);
+    filter: drop-shadow(0 3px 3px hsl(0 0% 0% / 0.3));
 }
 
+.custom-marker-icon svg {
+    position: relative;
+    display: block;
+    transform-origin: 50% 100%;
+    transition: transform 260ms var(--ease-spring);
+}
+
+.custom-marker-icon:hover svg {
+    transform: scale(1.1);
+}
+
+.custom-marker-icon .pin__body {
+    fill: var(--pin-fill);
+    stroke: var(--pin-stroke);
+    transition: fill var(--transition-normal);
+}
+
+.custom-marker-icon .pin__dot {
+    fill: var(--pin-stroke);
+}
+
+.custom-marker-icon--pending {
+    --pin-fill: var(--color-primary);
+}
+
+.custom-marker-icon--active {
+    --pin-fill: var(--pin-active);
+}
+
+.custom-marker-icon--highlight {
+    --pin-fill: #f97316;
+}
+
+/* The start pin: rings spread from its tip */
+.custom-marker-icon--pending::before,
+.custom-marker-icon--pending::after {
+    content: '';
+    position: absolute;
+    left: 50%;
+    bottom: -7px;
+    width: 14px;
+    height: 14px;
+    margin-left: -7px;
+    border-radius: 50%;
+    background: var(--color-primary);
+    opacity: 0;
+    animation: pin-ping 2.4s var(--ease-out) infinite;
+    pointer-events: none;
+}
+
+.custom-marker-icon--pending::after {
+    animation-delay: 1.2s;
+}
+
+@keyframes pin-ping {
+    0% { opacity: 0.55; transform: scale(0.4); }
+    100% { opacity: 0; transform: scale(4.2); }
+}
+
+.custom-marker-icon--pending svg {
+    animation: pin-drop 520ms var(--ease-spring);
+}
+
+@keyframes pin-drop {
+    from { opacity: 0; transform: translateY(-14px) scale(0.8); }
+    to { opacity: 1; transform: none; }
+}
+
+/* Route count on a generation's pin */
 .marker-badge {
     position: absolute;
     top: -7px;
@@ -295,44 +541,48 @@
     height: 18px;
     padding: 0 5px;
     border-radius: 9px;
-    border: 2px solid #fff;
-    background: #64748b;
-    color: #fff;
-    font: 600 11px/14px system-ui, sans-serif;
+    border: 2px solid var(--pin-stroke);
+    background: var(--pin-fill);
+    color: var(--pin-stroke);
+    font: 600 10.5px/14px var(--font-mono);
     text-align: center;
     box-sizing: border-box;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
-}
-
-.marker-badge--active {
-    background: var(--color-primary, #3068c8);
 }
 
 /* The pin of the generation under the pointer in "Your loops" */
 .custom-marker-icon--highlight .marker-badge {
     left: 20px;
-    background: #ea580c;
+    color: #fff;
+    border-color: #fff;
 }
 
 /* Several generations start at one pin: a menu of them */
 .set-menu .leaflet-popup-content-wrapper {
-    border-radius: 10px;
+    border-radius: var(--radius-lg);
     padding: 0;
+    background: var(--menu-bg);
+    color: var(--color-text);
+    box-shadow: var(--shadow-lg);
+}
+
+.set-menu .leaflet-popup-tip {
+    background: var(--menu-bg);
+    box-shadow: none;
 }
 
 .set-menu .leaflet-popup-content {
-    margin: 8px;
-    min-width: 180px;
-    font: 13px/1.3 system-ui, sans-serif;
+    margin: 6px;
+    min-width: 190px;
+    font: 13px/1.3 var(--font-family);
 }
 
 .set-menu__title {
-    padding: 2px 6px 6px;
-    font-size: 11px;
+    padding: 6px 8px;
+    font-size: 10.5px;
     font-weight: 600;
     text-transform: uppercase;
-    letter-spacing: 0.04em;
-    color: #64748b;
+    letter-spacing: 0.08em;
+    color: var(--color-text-muted);
 }
 
 .set-menu__list {
@@ -345,31 +595,33 @@
     display: flex;
     flex-direction: column;
     align-items: flex-start;
+    gap: 1px;
     width: 100%;
-    padding: 6px;
+    padding: 7px 8px;
     border: none;
-    border-radius: 6px;
+    border-radius: 7px;
     background: none;
     text-align: left;
     cursor: pointer;
+    transition: background var(--transition-fast);
 }
 
 .set-menu__item:hover {
-    background: #f1f5f9;
+    background: var(--color-surface);
 }
 
 .set-menu__item.is-active .set-menu__name {
-    color: var(--color-primary, #3068c8);
+    color: var(--color-primary);
 }
 
 .set-menu__name {
-    font-weight: 500;
-    color: #0f172a;
+    font-weight: 550;
+    color: var(--color-text);
 }
 
 .set-menu__meta {
     font-size: 11px;
-    color: #64748b;
+    color: var(--color-text-muted);
 }
 
 /* Boundary editor handles */
@@ -377,8 +629,9 @@
     border-radius: 50%;
     background: #fff;
     border: 2px solid #334155;
-    box-shadow: 0 1px 3px rgba(15, 23, 42, 0.35);
+    box-shadow: 0 1px 4px rgba(15, 23, 42, 0.4);
     cursor: grab;
+    transition: transform var(--transition-fast);
 }
 
 .boundary-handle:active {
@@ -395,4 +648,99 @@
     background: #334155;
     border-color: #fff;
     cursor: move;
+}
+
+/* ---- keyboard shortcuts sheet ---- */
+
+.shortcuts {
+    position: fixed;
+    inset: 0;
+    z-index: 2000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    background: hsl(var(--hue) 40% 6% / 0.45);
+    -webkit-backdrop-filter: blur(6px);
+    backdrop-filter: blur(6px);
+    animation: fade-in 200ms var(--ease-out);
+}
+
+.shortcuts__sheet {
+    width: min(720px, 100%);
+    max-height: min(680px, 100%);
+    display: flex;
+    flex-direction: column;
+    border-radius: 20px;
+    background: var(--glass-solid);
+    color: var(--color-text);
+    box-shadow: var(--shadow-lg), inset 0 1px 0 var(--glass-edge);
+    overflow: hidden;
+    animation: sheet-in 340ms var(--ease-spring);
+}
+
+@keyframes sheet-in {
+    from { opacity: 0; transform: translateY(16px) scale(0.96); }
+    to { opacity: 1; transform: none; }
+}
+
+.shortcuts__head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 18px 16px 14px 22px;
+    border-bottom: 1px solid var(--color-border);
+    background: radial-gradient(120% 160% at 100% 0%, hsl(var(--hue) 95% 60% / 0.14), transparent 60%);
+}
+
+.shortcuts__head h2 {
+    flex: 1 1 auto;
+    font-size: 17px;
+    font-weight: 620;
+    letter-spacing: -0.02em;
+}
+
+.shortcuts__body {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 4px 28px;
+    padding: 16px 22px 22px;
+    overflow-y: auto;
+}
+
+.shortcuts__group {
+    break-inside: avoid;
+    padding-bottom: 12px;
+}
+
+.shortcuts__group h3 {
+    margin: 6px 0 6px;
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--color-primary);
+}
+
+.shortcuts__row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 5px 0;
+    font-size: 13px;
+    color: var(--color-text-muted);
+}
+
+.shortcuts__row + .shortcuts__row {
+    border-top: 1px solid var(--color-border);
+}
+
+.shortcuts__keys {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    flex: 0 0 auto;
+    font-size: 11px;
+    color: var(--color-text-faint);
 }

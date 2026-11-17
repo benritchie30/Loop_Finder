@@ -5,24 +5,63 @@
     gap: 16px;
 }
 
+/* The start and its map data: a status card with a live dot */
 .area-status {
+    --status: var(--color-text-faint);
+    position: relative;
     display: flex;
     align-items: flex-start;
-    gap: 8px;
-    padding: 8px 10px;
-    border-radius: 9px;
-    background: var(--color-surface);
+    gap: 10px;
+    padding: 10px 12px;
+    border-radius: 12px;
+    background: var(--color-bg);
+    box-shadow: var(--shadow-raised);
     font-size: 12px;
-    line-height: 1.35;
+    line-height: 1.4;
     color: var(--color-text-muted);
+    overflow: hidden;
+    transition: color var(--transition-normal);
+}
+
+/* A strip of the status colour down the left edge */
+.area-status::before {
+    content: '';
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: 3px;
+    background: var(--status);
+    opacity: 0.9;
+    transition: background var(--transition-normal);
+}
+
+.area-status--none {
+    background: none;
+    box-shadow: inset 0 0 0 1px var(--color-border-strong);
+    border-radius: 12px;
+}
+
+.area-status--none::before {
+    display: none;
 }
 
 .area-status__dot {
+    position: relative;
     flex: 0 0 8px;
     height: 8px;
-    margin-top: 4px;
+    margin-top: 5px;
     border-radius: 50%;
-    background: var(--color-text-muted);
+    background: var(--status);
+    transition: background var(--transition-normal);
+}
+
+/* A ring that spreads from the dot while the map loads */
+.area-status__dot::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: 50%;
+    background: var(--status);
+    opacity: 0;
 }
 
 .area-status__text {
@@ -32,19 +71,32 @@
 }
 
 .area-status__text strong {
+    font-size: 13px;
     color: var(--color-text);
     font-weight: 600;
+    letter-spacing: -0.01em;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
 
-.area-status--checking .area-status__dot,
-.area-status--download .area-status__dot,
-.area-status--build .area-status__dot,
-.area-status--queue .area-status__dot {
-    background: var(--color-primary);
-    animation: pulse-dot 1s infinite;
+.area-status--checking,
+.area-status--download,
+.area-status--build,
+.area-status--queue {
+    --status: var(--color-primary);
+}
+
+.area-status--checking .area-status__dot::after,
+.area-status--download .area-status__dot::after,
+.area-status--build .area-status__dot::after,
+.area-status--queue .area-status__dot::after {
+    animation: status-ping 1.4s var(--ease-out) infinite;
+}
+
+@keyframes status-ping {
+    0% { opacity: 0.6; transform: scale(1); }
+    100% { opacity: 0; transform: scale(3.4); }
 }
 
 .area-status--download,
@@ -53,20 +105,28 @@
     color: var(--color-primary);
 }
 
-.area-status--ready .area-status__dot {
-    background: #16a34a;
+/* Loading: a bar of light runs along the bottom */
+.area-status--download::after,
+.area-status--build::after,
+.area-status--queue::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    bottom: 0;
+    width: 35%;
+    height: 2px;
+    background: linear-gradient(90deg, transparent, var(--color-primary), transparent);
+    animation: sheen 1.5s ease-in-out infinite;
 }
 
 .area-status--ready {
-    color: #15803d;
-}
-
-.area-status--error .area-status__dot {
-    background: #dc2626;
+    --status: var(--color-ok-solid);
+    color: var(--color-ok);
 }
 
 .area-status--error {
-    color: #b91c1c;
+    --status: var(--color-danger-solid);
+    color: var(--color-danger);
 }
 
 /* Loops from here: add to a generation that starts at the pin, or a new one */
@@ -84,10 +144,11 @@
     grid-template-columns: auto 1fr;
     column-gap: 8px;
     align-items: center;
-    padding: 5px 8px;
+    padding: 6px 10px;
     border: 1px solid transparent;
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     cursor: pointer;
+    transition: background var(--transition-fast), border-color var(--transition-fast);
 }
 
 .start-choice__row:hover {
@@ -128,15 +189,8 @@
 .search-area__row select {
     flex: 1 1 auto;
     min-width: 0;
-    font: inherit;
-    font-size: 13px;
-    padding: 6px 8px;
-    border: 1px solid var(--color-border);
-    border-radius: 8px;
-    background: var(--color-bg);
-    color: var(--color-text);
 }
 
 .search-area__warn {
-    color: #b45309;
+    color: var(--color-warn);
 }

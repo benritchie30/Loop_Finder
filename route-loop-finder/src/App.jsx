@@ -263,15 +263,9 @@ function App() {
   }, [viewOptions]);
   useEffect(() => {
     const root = document.documentElement;
-    root.style.setProperty('--color-primary', `hsl(${primaryColor}, 65%, 50%)`);
-    root.style.setProperty('--color-primary-light', `hsl(${primaryColor}, 65%, 90%)`);
-    root.style.setProperty('--color-primary-dark', `hsl(${primaryColor}, 65%, 40%)`);
-    root.style.setProperty('--color-accent', `hsl(${primaryColor}, 70%, 60%)`);
-    root.style.setProperty('--path-active', `hsl(${primaryColor}, 65%, 30%)`);
-    root.style.setProperty('--marker-pending', `hsl(${primaryColor}, 65%, 50%)`);
-    const fav = favoriteHueOf(primaryColor);
-    root.style.setProperty('--color-favorite', `hsl(${fav}, 75%, 45%)`);
-    root.style.setProperty('--color-favorite-light', `hsl(${fav}, 80%, 93%)`);
+    // Every colour token derives from these two hues (index.css), in the light and the dark theme.
+    root.style.setProperty('--hue', String(primaryColor));
+    root.style.setProperty('--fav-hue', String(favoriteHueOf(primaryColor)));
   }, [primaryColor]);
 
   // ---- settings, units ----

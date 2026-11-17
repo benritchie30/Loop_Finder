@@ -37,6 +37,7 @@ import numpy as np
 
 from road_stress import CROSSING_CAP, CROSSING_MAX_M, MILE_M, annotate_edge_stress
 import surface as surface_mod
+import tree_kernel
 
 TURN_DEG = 30.0
 TANGENT_M = 25.0
@@ -232,6 +233,9 @@ class EdgeTable:
         self._samples: Dict[int, list] = {}
         self._steps: Optional[tuple] = None
         self._pair_arrays: Optional[tuple] = None
+        self._step_arrays: Optional[tuple] = None
+        self._inc_arrays: Optional[tuple] = None
+        self._bearing_arrays: Optional[tuple] = None
         self._arrays: Optional[tuple] = None
 
     def steps(self) -> tuple:
@@ -264,6 +268,41 @@ class EdgeTable:
                             np.array([number[v] for v in self.head], dtype=np.int64),
                             np.array([number[v] for v in self.tail], dtype=np.int64), node_ids)
         return self._arrays
+
+    def step_arrays(self, forward: bool) -> tuple:
+        """steps()'s onward (or backward) table as arrays for tree_kernel:
+        (starts, nexts, turns), edge e's steps being nexts[starts[e]:starts[e + 1]]."""
+        if self._step_arrays is None:
+            out = []
+            for table in self.steps()[:2]:
+                starts, nexts, turns = [0], [], []
+                for rows in table:
+                    for x, _w, turn in rows:
+                        nexts.append(x)
+                        turns.append(turn)
+                    starts.append(len(nexts))
+                out.append((np.array(starts, dtype=np.int64), np.array(nexts, dtype=np.int64),
+                            np.array(turns, dtype=np.bool_)))
+            self._step_arrays = tuple(out)
+        return self._step_arrays[0 if forward else 1]
+
+    def bearing_arrays(self) -> tuple:
+        if self._bearing_arrays is None:
+            self._bearing_arrays = (np.array(self.b_in, dtype=np.float64), np.array(self.b_out, dtype=np.float64))
+        return self._bearing_arrays
+
+    def inc_arrays(self) -> tuple:
+        """(starts, edges, rev): the edges arriving at node number i are
+        edges[starts[i]:starts[i + 1]] (node numbers as in arrays()), and
+        `rev` as an array."""
+        if self._inc_arrays is None:
+            starts, edges = [0], []
+            for v in self.arrays()[4]:
+                edges.extend(self.inc[v])
+                starts.append(len(edges))
+            self._inc_arrays = (np.array(starts, dtype=np.int64), np.array(edges, dtype=np.int64),
+                                np.array(self.rev, dtype=np.int64))
+        return self._inc_arrays
 
     def pair_arrays(self) -> tuple:
         """steps()'s junction table as arrays, one row per (arriving edge,
@@ -622,7 +661,7 @@ class Tree:
     route_hash identifies a state's whole route, so a later round can tell
     when it rebuilt the same route and skip pairs it already judged.
     """
-    __slots__ = ('forward', 'cost', 'dist', 'qual', 'par', 'done', 'route_hash', '_chains', 'order', '_span', 'touch', '_one_way', '_arrays')
+    __slots__ = ('forward', 'cost', 'dist', 'qual', 'par', 'done', 'route_hash', '_chains', 'order', '_span', 'touch', '_one_way', '_arrays', 'nd')
 
     def __init__(self, forward, cost, dist, qual, par, done, route_hash, order=()):
         self.forward = forward
@@ -638,6 +677,9 @@ class Tree:
         self.touch: Optional[bytearray] = None  # see find_paths_tree
         self._one_way: Optional[bytearray] = None
         self._arrays: Optional[tuple] = None
+        # Grown by tree_kernel: (order, par, done) as numpy arrays. span,
+        # one_way and touch are then arrays too, made by compiled loops.
+        self.nd: Optional[tuple] = None
 
     def arrays(self) -> tuple:
         """(done, dist, qual) as numpy arrays, for pair_up."""
@@ -649,6 +691,8 @@ class Tree:
 
     def one_way(self, rev) -> bytearray:
         """Per state: its route uses an edge with no reverse edge."""
+        if self._one_way is None and self.nd is not None:
+            self._one_way = tree_kernel.one_way(self.nd[0], self.nd[1], np.asarray(rev, dtype=np.int64))
         if self._one_way is None:
             par = self.par
             flag = bytearray(len(par))
@@ -662,6 +706,8 @@ class Tree:
     def span(self) -> tuple:
         """(enter, leave) numbering of the states: x is on the route of e
         (or is e) exactly when enter[x] <= enter[e] < leave[x]."""
+        if self._span is None and self.nd is not None:
+            self._span = tree_kernel.span(self.nd[0], self.nd[1])
         if self._span is None:
             par = self.par
             n = len(par)
@@ -761,13 +807,13 @@ def grow_tree(
     # Per edge, fixed for this run: what riding it adds to quality, what it
     # adds to cost on top of that, and the length left after it at best
     # (INF where the edge may not be entered at all).
-    steps = E.steps()[0 if forward else 1]
     # (numpy does the three passes; element by element it is the same arithmetic.)
     length_a, uid_a, head_i, tail_i, node_ids = E.arrays()
-    ride = ((np.array(stress, dtype=np.float64) + np.array(extra, dtype=np.float64)) * length_a).tolist()
-    steer = ((detour_per_m + np.array(penalty, dtype=np.float64)[uid_a]) * length_a).tolist()
+    stress_a = np.array(stress, dtype=np.float64)
+    ride = (stress_a + np.array(extra, dtype=np.float64)) * length_a
+    steer = (detour_per_m + np.array(penalty, dtype=np.float64)[uid_a]) * length_a
     get = bound.get
-    left = np.array([get(v, INF) for v in node_ids], dtype=np.float64)[head_i if forward else tail_i].tolist()
+    left = np.array([get(v, INF) for v in node_ids], dtype=np.float64)[head_i if forward else tail_i]
     if forbidden:
         for u in forbidden:
             for x in E.by_uid[u]:
@@ -777,6 +823,27 @@ def grow_tree(
         for x in range(n):
             if far[x] in blocked_nodes:
                 left[x] = INF
+
+    if tree_kernel.grow is not None:
+        # The same loop as below, compiled (tree_kernel.py). It runs to the
+        # end without asking should_stop: a whole tree takes milliseconds.
+        starts, nexts, turns = E.step_arrays(forward)
+        b_in_a, b_out_a = E.bearing_arrays()
+        cost_a, dist_a, qual_a = (np.array(x, dtype=np.float64) for x in (cost, dist, qual))
+        par_a = np.full(n, -1, dtype=np.int64)
+        done_a, hash_a, order_a = tree_kernel.grow(
+            forward, float(max_len), starts, nexts, turns, length_a, stress_a, ride, steer, left,
+            b_in_a, b_out_a, cost_a, dist_a, qual_a, par_a,
+            np.array([c for c, _e in heap], dtype=np.float64), np.array([e for _c, e in heap], dtype=np.int64),
+            float(CROSSING_MAX_M), float(CROSSING_CAP), float(TURN_DEG))
+        tree = Tree(forward, cost_a.tolist(), dist_a.tolist(), qual_a.tolist(), par_a.tolist(),
+                    bytearray(done_a.tobytes()), hash_a.tolist(), order_a.tolist())
+        tree.nd = (order_a, par_a, done_a)
+        tree._arrays = (done_a.astype(bool), dist_a, qual_a)
+        return tree
+
+    steps = E.steps()[0 if forward else 1]
+    ride, steer, left = ride.tolist(), steer.tolist(), left.tolist()
     push, pop = heapq.heappush, heapq.heappop
 
     pops = 0
@@ -1520,10 +1587,24 @@ def find_paths_tree(
         print(f"[{tag}] request batch {batch}: {len(require)} required, "
               f"{len(forbidden)} forbidden edges")
 
+    start_no = E.arrays()[4].index(start_node)
+    rev_a = E.inc_arrays()[2]
+
     def touches(T, prefix=None):
         """Per state of T: its route passes a junction twice, or (a leg
         tree) comes back to a junction of the route it continues. The
         lollipop then closes before the return route starts."""
+        if T.touch is None and T.nd is not None:
+            _len, _uid, head_no, tail_no, node_ids = E.arrays()
+            on = np.zeros(len(node_ids), dtype=np.bool_)
+            on[start_no] = True
+            if prefix is not None:
+                F, eA = prefix[-1]
+                on[tail_no[F.chain(eA)]] = True
+            enter, leave = T.span()
+            inc_starts, inc_edges, _rev = E.inc_arrays()
+            T.touch = tree_kernel.touch(T.nd[0], T.nd[1], head_no, on, inc_starts, inc_edges,
+                                        T.nd[2], enter, leave)
         if T.touch is None:
             on = {start_node}
             if prefix is not None:
@@ -1562,7 +1643,7 @@ def find_paths_tree(
         F = eA = None
         if prefix is not None and len(prefix) != 1:
             return False
-        if (T.touch or touches(T, prefix))[e]:
+        if (touches(T, prefix) if T.touch is None else T.touch)[e]:
             return False
         if prefix is not None:
             if in_request:
@@ -1576,6 +1657,27 @@ def find_paths_tree(
         x = g
         stem = 0.0
         longer = False  # the stem has a one-way road: the way back is another road
+        if T.nd is not None and B.nd is not None and (F is None or F.nd is not None):
+            # The walk below, compiled.
+            head_no = E.arrays()[2]
+            inc_starts, inc_edges, _rev = E.inc_arrays()
+            if F is None:
+                x, y, where = tree_kernel.stem_hit(g, at, enter, leave, T.nd[2], B.nd[1], head_no,
+                                                   inc_starts, inc_edges, start_no,
+                                                   False, 0, enter, leave, T.nd[2])
+            else:
+                x, y, where = tree_kernel.stem_hit(g, at, enter, leave, T.nd[2], B.nd[1], head_no,
+                                                   inc_starts, inc_edges, start_no,
+                                                   True, f_at, f_enter, f_leave, F.nd[2])
+            if x < 0:
+                return False
+            if where == 1:
+                stem = T.dist[y]
+                longer = bool(T.one_way(rev_a)[y]) or (F is not None and bool(F.one_way(rev_a)[eA]))
+            elif where == 2:
+                stem = F.dist[y]
+                longer = bool(F.one_way(rev_a)[y])
+            return too_far_out(T.dist[e], stem, B.dist[g], B.dist[x], E.length[x], longer)
         while x >= 0:
             n = head[x]
             if n == start_node:
@@ -1597,10 +1699,14 @@ def find_paths_tree(
             x = par[x]
         if x < 0:
             return False
-        loop = T.dist[e] - stem + B.dist[g] - B.dist[x] + E.length[x]
+        return too_far_out(T.dist[e], stem, B.dist[g], B.dist[x], E.length[x], longer)
+
+    def too_far_out(out_dist, stem, back_dist, back_left, last_len, longer):
+        """The verdict of `doomed` from the lengths its walk found."""
+        loop = out_dist - stem + back_dist - back_left + last_len
         back = stem
         if longer:
-            back = 0.5 * min(stem, B.dist[x] - E.length[x])
+            back = 0.5 * min(stem, back_left - last_len)
         total = loop + stem + back
         slack = 1e-6 * total  # the sums here add up in another order than _shape's
         return (loop < min_loop_length - slack or loop < loop_ratio_floor * total - slack
