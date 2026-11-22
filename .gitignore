@@ -26,7 +26,12 @@ backend/.env
 # JavaScript/Node
 node_modules/
 dist/
+dist.new/
+dist.old/
 build/
+
+# Local tools (e.g. caddy.exe for the rehearsal in DEPLOY.md)
+*.exe
 .cache/
 
 # IDE

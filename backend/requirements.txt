@@ -1,7 +1,9 @@
-networkx
-websockets>=14  # server.py uses the asyncio server of websockets 14+
-shapely
-numpy  # loop_tree.py, graph_builder.py (shapely 2 needs it anyway)
-pyproj
-SRTM.py
-numba  # optional: compiles the tree search (tree_kernel.py); without it the same loops run in Python, about half as fast on a city-sized area
+# Pinned to the versions the app was developed and tested with, so the server gets
+# the same ones. To upgrade: change a version here, test locally, then deploy.
+networkx==3.6.1
+websockets==17.4  # server.py uses the asyncio server of websockets 14+
+shapely==2.2.0
+numpy==2.4.6  # loop_tree.py, graph_builder.py (shapely 2 needs it anyway)
+pyproj==3.7.2
+SRTM.py==0.3.7
+numba==0.68.1  # optional: compiles the tree search (tree_kernel.py); without it the same loops run in Python, about half as fast on a city-sized area
