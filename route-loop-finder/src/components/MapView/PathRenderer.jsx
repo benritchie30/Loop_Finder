@@ -36,7 +36,8 @@ function SurfaceLine({ pieces, style, pane }) {
  * Renders paths on the map. Nothing here takes pointer events: hovering and
  * clicking routes is done map-wide with a reach (RouteHover, PanInteractions).
  * - Active path: bold dark line (always on top)
- * - Filtered paths: subtle translucent preview
+ * - Filtered paths: subtle translucent preview (every one, the shown one
+ *   too, under its bold line: the canvas only changes with the list)
  * - Direction arrows: small rotated arrows along the active path
  * - Centroid: small dot (for spatial sort testing)
  * - Route card under the pointer (hoveredPathId): shown in place of the
@@ -66,6 +67,12 @@ function SurfaceLine({ pieces, style, pane }) {
  * Render order ensures the shown path is always visible above others.
  */
 const FAINT_HALO_EXTRA_PX = 2.5; // a faint route's halo shows 1.25 px on each side
+
+// filteredPaths -> { deps, groups }: the faint routes' groups of a list of
+// routes, kept while that list lives, so a list shown again (the Favorites
+// page's focus moving back to a group) gives the canvas the same groups, and
+// it reuses the shape it merged for them (CanvasLines).
+const previewCache = new WeakMap();
 const CASING_EXTRA_PX = 5; // the casing shows 2.5 px on each side of the route
 
 function PathRenderer({
@@ -177,11 +184,18 @@ function PathRenderer({
     }), [dark, shownWeight]);
 
     // The faint routes, by style (one canvas draws them all: CanvasLines).
+    // Every listed route, the shown one too (its bold line and casing cover
+    // its faint one): the canvas then only changes when the list does, not
+    // at every route shown or card previewed. Leaving the shown route out
+    // made each of those merge and repaint every faint route (about 180 ms
+    // of painting with 240 routes).
     const previewGroups = useMemo(() => {
         if (!showPathPreview || !filteredPaths?.length) return [];
+        const deps = [groupOf, groupStyles, inactiveStyle, dark];
+        const kept = previewCache.get(filteredPaths);
+        if (kept && kept.deps.every((d, i) => d === deps[i])) return kept.groups;
         const byStyle = new Map();
         filteredPaths.forEach((path) => {
-            if (path === shownPath || (path.id && path.id === shownPath?.id)) return;
             const group = groupOf ? groupOf(path) : null;
             const style = (group && groupStyles[group]?.inactive) || inactiveStyle;
             if (!byStyle.has(style)) byStyle.set(style, []);
@@ -200,9 +214,11 @@ function PathRenderer({
             },
             items,
             merge: true,
+            halo: true, // (the browser checks count routes without their halos)
         }));
-        return [...halos, ...groups];
-    }, [showPathPreview, filteredPaths, shownPath, groupOf, groupStyles, inactiveStyle, dark]);
+        previewCache.set(filteredPaths, { deps, groups: [...halos, ...groups] });
+        return previewCache.get(filteredPaths).groups;
+    }, [showPathPreview, filteredPaths, groupOf, groupStyles, inactiveStyle, dark]);
 
     return (
         <>

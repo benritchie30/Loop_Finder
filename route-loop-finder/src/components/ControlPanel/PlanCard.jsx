@@ -34,8 +34,9 @@ function setSummary(g, units) {
 /**
  * Plan a loop: where (the start), how long, which roads, roads and areas to
  * go through or avoid, Find loops. The rest is on the Advanced page. When
- * generations already start where the pin is, Find loops adds to one of them
- * (the newest, unless another one or "New set" is chosen).
+ * generations already start where the pin is, they are listed under "Loops
+ * from here": New set is chosen (Find loops makes another one) until one of
+ * them is picked (Add loops adds to it).
  */
 function PlanCard({
     genSettings,

@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { useMap } from 'react-leaflet';
 import L from 'leaflet';
 import { routeLatLngs } from '../../utils/surface';
+import { EXPOSE_STATE } from '../../utils/devHooks';
 
 /**
  * Many lines on one canvas: the faint routes of a generation (a hundred or
@@ -192,11 +193,12 @@ const LinesCanvas = L.Renderer.extend({
 
     setGroups(groups) {
         this._groups = groups || [];
-        // Dev server only: what the canvas draws (colour, number of lines per
-        // style), for the browser checks (backend/tools/check_frontend.py).
-        if (import.meta.env.DEV && this._container) {
+        // Dev server (utils/devHooks) only: what the canvas draws (colour, number of lines per
+        // style, and whether it is the halo under other lines), for the
+        // browser checks (backend/tools/check_frontend.py).
+        if (EXPOSE_STATE && this._container) {
             this._container.dataset.lines = JSON.stringify(this._groups
-                .map((g) => ({ color: g.style?.color ?? null, lines: (g.items || []).length })));
+                .map((g) => ({ color: g.style?.color ?? null, lines: (g.items || []).length, halo: !!g.halo })));
         }
         if (!this._map || this._frame) return;
         this._frame = L.Util.requestAnimFrame(() => {

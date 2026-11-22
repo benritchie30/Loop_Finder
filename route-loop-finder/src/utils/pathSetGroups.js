@@ -42,6 +42,25 @@ export function setsAtStart(generations, position, withinM = SAME_START_M) {
         .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
 }
 
+/** The generations at a pin, for its menu: newest first (a copy). */
+export function newestFirst(items) {
+    return [...(items || [])].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+}
+
+/**
+ * The generation Find loops adds to, from the plan's start choice
+ * ({ pin, id }: picked in "Loops from here", or by "Plan again from here"):
+ * its id while the pin is still where it was chosen and the generation still
+ * starts there, else null (a new set). A pin placed by hand on a start that
+ * has generations starts a new set unless one is picked.
+ */
+export function chosenSet(setsHere, choice, pin) {
+    if (!choice || choice.id == null || !pin || !choice.pin) return null;
+    const samePin = Math.abs(choice.pin.lat - pin.lat) < 1e-9 && Math.abs(choice.pin.lng - pin.lng) < 1e-9;
+    if (!samePin) return null;
+    return (setsHere || []).some((g) => g.id === choice.id) ? choice.id : null;
+}
+
 /** [shortest, longest] route length (miles) of a generation's routes, or null. */
 export function lengthRange(paths) {
     let lo = Infinity;
@@ -53,28 +72,4 @@ export function lengthRange(paths) {
         hi = Math.max(hi, miles);
     });
     return lo <= hi ? [lo, hi] : null;
-}
-
-/**
- * Favorites grouped by where they start, newest first:
- * [{ key, position, records, setId, title }]. setId is the generation to
- * open for the group (the newest favorite's own, if it still exists, else
- * the newest one that starts there; null when none is left), title its name
- * (else the name the favorite was saved with). Favorites saved without a
- * start are one group at the end (position null).
- */
-export function groupFavorites(records, generations) {
-    const sorted = [...(records || [])].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
-    const withStart = sorted.filter((r) => positionOf({ position: r.start }));
-    const noStart = sorted.filter((r) => !positionOf({ position: r.start }));
-    const byId = new Map((generations || []).map((g) => [g.id, g]));
-    const groups = groupByStart(withStart.map((r) => ({ id: r.key, position: r.start, record: r })))
-        .map((g) => ({ key: g.key, position: g.position, records: g.items.map((i) => i.record) }));
-    if (noStart.length) groups.push({ key: 'no-start', position: null, records: noStart });
-    return groups.map((group) => {
-        const own = group.records.map((r) => byId.get(r.pathSetId)).find(Boolean);
-        const there = own || setsAtStart(generations, group.position)[0] || null;
-        const saved = group.records.find((r) => r.setName)?.setName;
-        return { ...group, setId: there?.id ?? null, title: there?.name || saved || 'Favorites' };
-    });
 }

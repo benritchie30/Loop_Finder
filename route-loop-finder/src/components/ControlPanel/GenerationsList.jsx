@@ -1,16 +1,7 @@
 import { useState } from 'react';
 import { Check, Pencil, Trash2 } from 'lucide-react';
 import { distanceUnit, milesToDisplay, useUnits } from '../../utils/units';
-
-function when(ts) {
-    if (!ts) return '';
-    const d = new Date(ts);
-    const today = new Date();
-    if (d.toDateString() === today.toDateString()) {
-        return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-    }
-    return d.toLocaleDateString([], { month: 'short', day: 'numeric', year: d.getFullYear() === today.getFullYear() ? undefined : 'numeric' });
-}
+import { whenText as when } from '../../utils/dates';
 
 /** "5.2–14.8 mi": the lengths the generation's routes actually have. */
 function rangeText(range, units) {

@@ -6,7 +6,6 @@
 - [ ] Better elevation data: USGS 3DEP bare-earth elevation (~10 m, lidar, US) from the free AWS Terrain Tiles instead of SRTM, which is a surface model (roofs and tree canopy add bumps).
 - [ ] Experiment with new path finding algorithms attempting to improve speed and path quality.
 - [ ] Improving tile/map data download speed.
-- [ ] Better filtering and sorting for favorited paths.
 - [ ] Improving aesthetics of paths and tools on map. Make paths clear to see no matter which background is selected.
 - [ ] Path editor tool. (allows you to edit path or draw one from scratch)
 - [ ] Backup, import and sharing: export / import every saved loop and favorite as one JSON file (they live only in the browser), and a share link for a single route (the route in the URL hash, no accounts).
@@ -18,6 +17,10 @@
 - 
 ## Done
 
+- [x] Favorites page (the plan's Favorites button): sort (date favorited, best, the route measures), group (by set, by start, none; near the map first), filters and In map view, star pins per start (deleted sets' too), ‹ › and arrows.
+- [x] Generation pins: a menu on every pin (open a set, New set from here, Show all routes from here with two or more sets), closed by any click elsewhere; a start pin placed by hand, or Plan again from here, starts a new set.
+- [x] All routes from here: every set of a start as one list (a route once, Best taking turns), each card naming its set, More routes into a chosen set.
+- [x] Faster with many routes: the faint routes' canvas only repaints when the list changes; the Favorites page loads road pieces only near the view.
 - [x] Search area on the map: the automatic area is drawn like a custom boundary (a grey dotted circle of max / 2 around the start). A custom boundary replaces it instead of being drawn over it, an open generation's follows the More routes length slider, and the plan's follows the plan's.
 - [x] Remove turns from the route cards and the filter / sort list (the search still counts them internally).
 - [x] GPX export of a route: the download icon by "Route n of m", the selected card's GPX button, or the selected favorite's icon. One track with elevation, in the direction shown (Reverse included), no times, so apps import it as a route.

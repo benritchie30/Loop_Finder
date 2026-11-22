@@ -10,6 +10,8 @@ import DrawingHandler from './DrawingHandler';
 import SelectionLayer from './SelectionLayer';
 import PathMarker from './PathMarker';
 import SetPins from './SetPins';
+import FavoritePins from './FavoritePins';
+import MenuDismiss from './MenuDismiss';
 import MapFocus from './MapFocus';
 import { BoundaryEditLayer, BoundaryOutline, ReachOutline } from './BoundaryLayers';
 import PathRenderer from './PathRenderer';
@@ -23,15 +25,40 @@ import SearchBox from './SearchBox';
 import SmoothWheelZoom from './SmoothWheelZoom';
 import QuickActions from './QuickActions';
 import { MapDarkContext, useTheme } from '../../utils/theme';
+import { EXPOSE_STATE } from '../../utils/devHooks';
 
 /** Hands the Leaflet map to MapView (search flies it, search ranks results near its centre). */
 function MapRef({ mapRef }) {
     const map = useMap();
     useEffect(() => {
         mapRef.current = map;
-        // Dev server only: the browser checks (backend/tools/check_frontend.py) place the pointer with it.
-        if (import.meta.env.DEV) window.__loopMap = map;
+        // Dev server (utils/devHooks) only: the browser checks and the UI benchmark place the pointer with it.
+        if (EXPOSE_STATE) window.__loopMap = map;
     }, [map, mapRef]);
+    return null;
+}
+
+/**
+ * Reports the map's view ({ south, west, north, east, zoom, byApp }) when it
+ * stops moving, and at once when it starts to (the Favorites page loads road
+ * pieces for the favorites in or near it, and orders its groups by it).
+ * byApp: the app moved it (MapFocus), not the user.
+ */
+function ViewReporter({ onChange }) {
+    const map = useMap();
+    useEffect(() => {
+        if (!onChange) return undefined;
+        const report = () => {
+            const b = map.getBounds();
+            onChange({
+                south: b.getSouth(), west: b.getWest(), north: b.getNorth(), east: b.getEast(),
+                zoom: map.getZoom(), byApp: !!map._loopAppMove,
+            });
+        };
+        report();
+        map.on('moveend', report);
+        return () => map.off('moveend', report);
+    }, [map, onChange]);
     return null;
 }
 
@@ -79,6 +106,8 @@ function MapView({
     drawnSelections,
     onMapClick,
     onMarkerClick,
+    onNewSetAt, // a pin's menu: New set from here ({ lat, lng })
+    onShowAllAt, // a pin's menu (two or more sets): all routes from here ({ lat, lng })
     onSelection,
     onExcludeArea,
     onRemoveSelection,
@@ -96,6 +125,8 @@ function MapView({
     reachArea = null, // the automatic search area to outline: { lat, lng, miles } (max / 2 around the start)
     notice: externalNotice = null, // { text, id } from App (snaps, batch notes)
     roadIndex = null, // utils/graphRoads index of the roads of the pin's / generation's area
+    roadsState = null, // Favorites tab: 'zoom' | 'none' | 'loading' | 'ready' (the Road tool's road pieces)
+    onViewChange, // Favorites tab: ({ south, west, north, east, zoom }) when the map stops
     onNeedGraphEdges, // ask App to fetch them (once per area)
     showGraphRoads = true, // faint roads over tiles (offline they are always drawn)
     showSelections = true, // painted roads and areas in pan mode (a tool always shows them)
@@ -112,7 +143,8 @@ function MapView({
     addingToName = null, // Find loops adds to this generation (it starts where the pin is)
     centreOn = null, // { lat, lng, n }: centre the map there (beside the panel)
     showBounds = null, // { bounds, n }: bring a route into view
-    favoritesView = null, // the plan's Favorites tab: { paths, current, hoveredId, onSelect } (every favorite on the map)
+    favoritesView = null, // the Favorites page: { paths, current, hoveredId, onSelect } (every favorite listed, on the map)
+    favoritePins = null, // the Favorites page's pins: FavoritePins' props (instead of the generations' pins)
     boundaryShapes = null, // a custom search boundary to outline (grey, dotted)
     boundaryEdit = null, // the boundary being edited: { shapes, tool, add, change, draftingRef } (drawn with handles)
     isFavorite = null, // (route) => is it a favorite (drawn in the favorite colour)
@@ -242,6 +274,13 @@ function MapView({
                 + 'Without internet, drop the pin further inside the light area or shorten the route.';
         }
         const avoid = isExcludeMode;
+        if (activeTool === 'road' && favoritesView && roadsState && roadsState !== 'ready') {
+            return {
+                zoom: 'Zoom in to paint roads (roads load for the favorites in view)',
+                none: 'No favorite in view: roads load under the favorites on the map',
+                loading: 'Loading roads…',
+            }[roadsState];
+        }
         if (activeTool === 'road') {
             return avoid
                 ? 'Click a road to avoid it (red) · Ctrl-click: the whole road · click a painted road to clear it'
@@ -264,7 +303,7 @@ function MapView({
         }
         if (mode === 'input' && favoritesView) {
             return favoritesView.paths.length
-                ? 'Click a favorite to show it · the tools filter favorites · Your loops to plan a start'
+                ? 'Click a favorite to show it · the tools filter favorites · Backspace: back to the plan'
                 : null;
         }
         if (mode === 'input' && pendingMarker) {
@@ -403,6 +442,7 @@ function MapView({
                     selections={selectionsShown ? drawnSelections : null}
                     onSelectPath={mode === 'display' ? onSelectPath : favoritesView?.onSelect}
                     onMoveStart={favoritesView ? null : onMapClick}
+                    onClickAway={favoritesView?.onClickAway || null}
                     onRemoveSelection={onRemoveSelection}
                 />
 
@@ -461,15 +501,23 @@ function MapView({
                 {/* The automatic search area (max / 2 around the start), when no custom boundary replaces it */}
                 {reachArea && <ReachOutline lat={reachArea.lat} lng={reachArea.lng} miles={reachArea.miles} />}
 
-                {/* Every generation's pin (one per start); click to open it, or pick from a menu. */}
-                <SetPins
-                    markers={pathSetMarkers}
-                    mode={mode}
-                    activePathSetId={activePathSetId}
-                    hoveredSetId={hoveredSetId}
-                    onOpen={onMarkerClick}
-                />
+                {/* Every generation's pin (one per start); click for its menu: open one, or a new set there.
+                    On the Favorites page, a pin per start of the favorites listed instead. */}
+                {favoritePins ? <FavoritePins {...favoritePins} /> : (
+                    <SetPins
+                        markers={pathSetMarkers}
+                        mode={mode}
+                        activePathSetId={activePathSetId}
+                        hoveredSetId={hoveredSetId}
+                        onOpen={onMarkerClick}
+                        onNewSet={onNewSetAt}
+                        onShowAll={onShowAllAt}
+                    />
+                )}
+                {/* A pin's menu closes at a click anywhere else (on the map that click does nothing more) */}
+                <MenuDismiss />
                 <MapFocus centre={centreOn} show={showBounds} />
+                <ViewReporter onChange={favoritesView ? onViewChange : null} />
 
                 {/* Path rendering */}
                 {mode === 'display' && activePathSetId && (

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { groupByStart, groupFavorites, lengthRange, sameStart, setsAtStart, SAME_START_M } from '../pathSetGroups';
+import { chosenSet, groupByStart, lengthRange, newestFirst, sameStart, setsAtStart, SAME_START_M } from '../pathSetGroups';
 
 const M_LAT = 1 / 111320;
 const A = { lat: 35.2, lng: -80.8 };
@@ -44,34 +44,29 @@ describe('length range of a set', () => {
     });
 });
 
-describe('favorites grouped by start', () => {
-    const fav = (key, start, createdAt, pathSetId = null, setName = null) => ({ key, start, createdAt, pathSetId, setName });
-
-    it('newest first, one group per start, opening the favorite\'s own generation', () => {
-        const gens = [
-            { id: 'g1', name: 'Dilworth', markerPosition: A, createdAt: 1 },
-            { id: 'g2', name: 'Dilworth 2', markerPosition: A, createdAt: 2 },
-        ];
-        const groups = groupFavorites([
-            fav('a', A, 1, 'g1', 'Dilworth'),
-            fav('b', north(A, 900), 3, 'gone', 'Boone'),
-            fav('c', north(A, 4), 2, 'g1', 'Dilworth'),
-        ], gens);
-        expect(groups.map((g) => g.records.map((r) => r.key))).toEqual([['b'], ['c', 'a']]);
-        expect(groups[1]).toMatchObject({ setId: 'g1', title: 'Dilworth' });
+describe('the pin menu and the plan\'s start choice', () => {
+    it('a pin\'s menu lists its sets newest first, without reordering the pin\'s own list', () => {
+        const items = [{ id: 'a', createdAt: 1 }, { id: 'c', createdAt: 3 }, { id: 'b', createdAt: 2 }, { id: 'x' }];
+        expect(newestFirst(items).map((i) => i.id)).toEqual(['c', 'b', 'a', 'x']);
+        expect(items.map((i) => i.id)).toEqual(['a', 'c', 'b', 'x']);
+        expect(newestFirst(null)).toEqual([]);
     });
 
-    it('a deleted generation: another one at that start, else none (its saved name)', () => {
-        const gens = [{ id: 'g2', name: 'Dilworth 2', markerPosition: A, createdAt: 2 }];
-        const [here] = groupFavorites([fav('a', A, 1, 'gone', 'Dilworth')], gens);
-        expect(here).toMatchObject({ setId: 'g2', title: 'Dilworth 2' });
-        const [away] = groupFavorites([fav('b', north(A, 900), 1, 'gone', 'Boone')], gens);
-        expect(away).toMatchObject({ setId: null, title: 'Boone' });
+    const here = [{ id: 'new' }, { id: 'old' }];
+    const pin = { lat: A.lat, lng: A.lng };
+
+    it('a pin placed by hand on a start with sets makes a new set', () => {
+        expect(chosenSet(here, null, pin)).toBe(null);
     });
 
-    it('favorites without a start are one group at the end', () => {
-        const groups = groupFavorites([fav('x', null, 5), fav('a', A, 1)], []);
-        expect(groups.map((g) => g.key)).toEqual(['a', 'no-start']);
-        expect(groups[1].position).toBeNull();
+    it('a set picked for this pin (or by Plan again from here) is added to', () => {
+        expect(chosenSet(here, { pin: { ...pin }, id: 'old' }, pin)).toBe('old');
+    });
+
+    it('New set picked, the pin moved since, or the set gone: a new set', () => {
+        expect(chosenSet(here, { pin, id: null }, pin)).toBe(null);
+        expect(chosenSet(here, { pin: north(A, 5), id: 'old' }, pin)).toBe(null);
+        expect(chosenSet(here, { pin, id: 'deleted' }, pin)).toBe(null);
+        expect(chosenSet(here, { pin, id: 'old' }, null)).toBe(null);
     });
 });

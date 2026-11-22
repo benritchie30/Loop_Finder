@@ -6,8 +6,32 @@ import { formatUnpaved } from '../../utils/pathFiltering';
 import { unpavedShare } from '../../utils/surface';
 import { COMPARE_HUES, GROUP_BADGE } from '../../utils/compareSets';
 
+/**
+ * All routes from here: the set the route is from, small; a click opens that
+ * set by itself (on this route). "+1" when another set found it too (named
+ * in the tooltip).
+ */
+function FromSet({ name, also, alsoCount = 0, onOpen }) {
+    const title = `Open “${name}” by itself${also ? ` (also found by ${also})` : ''}`;
+    return (
+        <button
+            type="button"
+            className="route-card__from"
+            onClick={(e) => {
+                e.stopPropagation(); // not a click on the card
+                onOpen?.();
+            }}
+            title={title}
+            aria-label={title}
+        >
+            <span className="route-card__from-name">{name}</span>
+            {alsoCount > 0 && <span className="route-card__from-more">+{alsoCount}</span>}
+        </button>
+    );
+}
+
 /** The selected card's details: what the card row does not already say, and its GPX download. */
-function Details({ p, units, onDownloadGpx }) {
+function Details({ p, units, onDownloadGpx, from = null }) {
     const miles = p.total_miles;
     const rate = miles > 0 && typeof p.total_climb_ft === 'number' ? p.total_climb_ft / miles : null;
     const items = [
@@ -28,19 +52,22 @@ function Details({ p, units, onDownloadGpx }) {
                     </div>
                 ))}
             </dl>
-            {onDownloadGpx && (
+            {(onDownloadGpx || from) && (
                 <div className="route-card__actions">
-                    <button
-                        type="button"
-                        className="link-btn route-card__gpx"
-                        onClick={(e) => {
-                            e.stopPropagation(); // not a click on the card
-                            onDownloadGpx();
-                        }}
-                        title="Save as a GPX file to import into Ride with GPS, Strava, Garmin…"
-                    >
-                        <Download size={13} /> GPX
-                    </button>
+                    {from}
+                    {onDownloadGpx && (
+                        <button
+                            type="button"
+                            className="link-btn route-card__gpx"
+                            onClick={(e) => {
+                                e.stopPropagation(); // not a click on the card
+                                onDownloadGpx();
+                            }}
+                            title="Save as a GPX file to import into Ride with GPS, Strava, Garmin…"
+                        >
+                            <Download size={13} /> GPX
+                        </button>
+                    )}
                 </div>
             )}
         </>
@@ -57,9 +84,16 @@ function Details({ p, units, onDownloadGpx }) {
 const RouteCard = memo(forwardRef(function RouteCard({
     path, number, selected, onSelect, onHover, favorite = false, onToggleFavorite, onDownloadGpx,
     group = null, // dev compare: 'a' | 'b' | 'shared'
+    fromName = null, // all routes from here: the set it is from
+    fromAlso = null, // ...and the other sets that found it (names, for the tooltip)
+    fromAlsoCount = 0, // ...how many
+    onOpenSet, // (route): open its set by itself
 }, ref) {
     const units = useUnits();
     const p = path.properties || {};
+    const from = fromName
+        ? <FromSet name={fromName} also={fromAlso} alsoCount={fromAlsoCount} onOpen={onOpenSet && (() => onOpenSet(path))} />
+        : null;
     return (
         <div
             ref={ref}
@@ -105,9 +139,10 @@ const RouteCard = memo(forwardRef(function RouteCard({
                 <div className="route-card__meta">
                     {p.loop_ratio != null && <span>loop {Math.round(p.loop_ratio * 100)}%</span>}
                     {unpavedShare(p) != null && <span>{formatUnpaved(unpavedShare(p))} unpaved</span>}
+                    {from}
                 </div>
             )}
-            {selected && <Details p={p} units={units} onDownloadGpx={onDownloadGpx && (() => onDownloadGpx(path))} />}
+            {selected && <Details p={p} units={units} onDownloadGpx={onDownloadGpx && (() => onDownloadGpx(path))} from={from} />}
         </div>
     );
 }));

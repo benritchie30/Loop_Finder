@@ -13,8 +13,10 @@ const DOUBLE_CLICK_MS = 250;
  *   several run together steps through them (quick clicks too). Ctrl-click
  *   (Cmd-click on a Mac) steps back through them, the reverse of clicking.
  *   Nothing is filtered or sent. (Shift stays Leaflet's: Shift-drag zooms to a box.)
- * - Plan view: a click moves the start pin; with the Favorites tab open, a
- *   click near favorites shows one there instead (and steps like routes).
+ * - Plan view: a click moves the start pin. On the Favorites page a click near
+ *   the favorites on the map (`paths`: those in focus) shows one there (and
+ *   steps like routes); a click elsewhere, or on a hidden one, is
+ *   onClickAway (nothing selected).
  * - Double-click a painted road, an area's outline, or an old pin: remove it
  *   (a Ctrl-click road goes as a whole). Double-click never zooms.
  * Only clicks pressed in pan mode count: releasing a drawn area switches back
@@ -28,11 +30,12 @@ function PanInteractions({
     selections,
     onSelectPath,
     onMoveStart,
+    onClickAway = null,
     onRemoveSelection,
 }) {
     const map = useMap();
     const state = useRef({});
-    state.current = { mode, paths, currentPathId, selections, onSelectPath, onMoveStart, onRemoveSelection };
+    state.current = { mode, paths, currentPathId, selections, onSelectPath, onMoveStart, onClickAway, onRemoveSelection };
 
     // No double-click zoom: quick clicks on routes would zoom the map.
     useEffect(() => {
@@ -64,7 +67,8 @@ function PanInteractions({
                         return;
                     }
                 }
-                s.onMoveStart?.({ lat: latlng.lat, lng: latlng.lng });
+                if (s.onMoveStart) s.onMoveStart({ lat: latlng.lat, lng: latlng.lng });
+                else s.onClickAway?.();
             }
         };
 

@@ -86,8 +86,20 @@ class DownloadTests(unittest.TestCase):
 
     def test_a_silent_server_is_overtaken_by_another(self):
         release = threading.Event()
-        self.addCleanup(release.set)
         store, servers = self.store({A: lambda u: release.wait(30), B: lambda u: None})
+
+        def release_and_settle():
+            # The silent server answers at last: let its download finish (it may
+            # still write a tile) before the folder is removed, or the removal
+            # can meet a file being written ("Directory not empty").
+            release.set()
+            deadline = time.time() + 5
+            while time.time() < deadline:
+                with store._lock:
+                    if not store._active:
+                        return
+                time.sleep(0.02)
+        self.addCleanup(release_and_settle)
         with mock.patch.object(map_store, 'HEDGE_AFTER', 0.2):
             started = time.time()
             self.assertTrue(store.ensure(TILES))

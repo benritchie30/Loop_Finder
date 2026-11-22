@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { ArrowDownWideNarrow, ArrowUpNarrowWide, ChevronLeft, ChevronRight, ChevronUp, Download, MoreHorizontal, Plus, Star, Trash2 } from 'lucide-react';
 import DualRange from './DualRange';
 import RangeFilter from './RangeFilter';
@@ -10,6 +10,7 @@ import { ROAD_PREFERENCES } from '../../utils/roadWeights';
 import { SURFACE_PREFERENCES, surfacePreference } from '../../utils/surface';
 import { roadsLabel, settingsRows } from '../../utils/generationSettings';
 import ComparePanel from './ComparePanel';
+import { useCardList } from '../../hooks/useCardList';
 import {
     displayToMiles,
     distanceUnit,
@@ -22,48 +23,6 @@ import './GenerationPanel.css';
 function roadsShort(preference) {
     if (preference === 'custom') return 'Custom';
     return ROAD_PREFERENCES.find((x) => x.id === (preference || 'balanced'))?.label || 'Balanced';
-}
-
-const LIST_EDGE_PX = 14; // the list fades its cards out this close to its edges
-const LIST_TOP_PX = 10; // a card scrolled to the top of the list sits this far down (below the fade)
-const WHEEL_NOTCH_PX = 50; // a wheel event this big is one notch of a mouse wheel
-const WHEEL_CARD_PX = 66; // trackpad: about one card of movement steps one card
-const WHEEL_SETTLE_MS = 700; // no scrollend event (older browsers): settled after this
-
-/**
- * Where the list scrolls to put the next (dir 1) or previous (dir -1) card at
- * its top, going from scrollTop `from`; null at the end.
- */
-function nextCardTop(list, from, dir) {
-    const max = list.scrollHeight - list.clientHeight;
-    const tops = [...list.querySelectorAll('.route-card')]
-        .map((card) => Math.min(max, Math.max(0, card.offsetTop - LIST_TOP_PX)));
-    if (dir > 0) {
-        const next = tops.find((top) => top > from + 1);
-        return next ?? null;
-    }
-    const before = tops.filter((top) => top < from - 1);
-    return before.length ? before[before.length - 1] : null;
-}
-
-/**
- * Scroll the list just enough that a clicked card shows whole, but keep the
- * card under the pointer at pointerY (page px), so no other card slides there.
- */
-function revealUnderPointer(list, card, pointerY) {
-    const l = list.getBoundingClientRect();
-    const c = card.getBoundingClientRect();
-    let delta = 0; // > 0 scrolls the list down (the card moves up)
-    if (c.bottom > l.bottom - LIST_EDGE_PX) delta = c.bottom - (l.bottom - LIST_EDGE_PX);
-    if (c.top - delta < l.top + LIST_EDGE_PX) delta = c.top - (l.top + LIST_EDGE_PX);
-    if (pointerY != null) {
-        const keep = 8; // px of the card kept between the pointer and the card's edge
-        if (delta > 0) delta = Math.min(delta, Math.max(0, c.bottom - pointerY - keep));
-        if (delta < 0) delta = Math.max(delta, -Math.max(0, pointerY - c.top - keep));
-    }
-    if (Math.abs(delta) < 1) return;
-    if (typeof list.scrollTo === 'function') list.scrollTo({ top: list.scrollTop + delta, behavior: 'smooth' });
-    else list.scrollTop += delta;
 }
 
 /** Which way the list runs, in words, for the direction button. */
@@ -117,6 +76,10 @@ function GenerationPanel({
     favoriteCount = 0, // favorite routes in this generation
     compareProps = null, // dev (LOOP_DEV=1): { candidates, compare, onStart, onView, onSwap, onEnd }
     compareGroupOf = null, // (route) => 'a' | 'b' | 'shared' | null, comparing
+    // All routes from here: { sets (newest first), targetId, onTarget(id), setOf(route), onOpenSet(route) }.
+    // No rename, delete or settings used; each card names its set (a click opens it by itself);
+    // More routes adds to the set chosen in its options.
+    combined = null,
 }) {
     const units = useUnits();
     const settings = generation.settings || {};
@@ -134,141 +97,20 @@ function GenerationPanel({
     const [editing, setEditing] = useState(false);
     const [draftName, setDraftName] = useState(generation.name);
 
-    // The selected card sits in the middle of the list (as near as the ends allow),
-    // so the routes before and after it are one short move away. A clicked card
-    // is the exception: it stays under the pointer (centring it would slide
-    // another card under the pointer, which would preview that one). The list
-    // only scrolls to show all of it (its details open below), never so far
-    // that it leaves the pointer.
-    const listRef = useRef(null);
-    const selectedRef = useRef(null);
+    // The cards' list (hooks/useCardList): the selected card kept in view, a
+    // card under the pointer previewed on the map, one card per wheel notch.
+    // The cards' handlers keep one identity, so a card renders again only when
+    // something it shows changes: a new route streaming in leaves the others alone.
     const currentId = currentPath?.id;
-    const pointerAt = useRef(null); // last pointer position over the list
-    const clickedId = useRef(null); // a card was clicked: the selection it makes stays put
-    // The cards' handlers keep one identity (they read what is current from
-    // refs), so a card renders again only when something it shows changes:
-    // a new route streaming in leaves the other cards alone.
-    const currentIdRef = useRef(currentId);
-    currentIdRef.current = currentId;
-    const selectCard = useCallback((id) => {
-        if (id === currentIdRef.current) {
-            // The selected card clicked again: bring it into view if it is
-            // partly hidden (the same just-enough scroll as a new selection).
-            clickedId.current = null;
-            if (listRef.current && selectedRef.current) {
-                revealUnderPointer(listRef.current, selectedRef.current, pointerAt.current?.y);
-            }
-            return;
-        }
-        clickedId.current = id;
-        onSelectPath(id);
-    }, [onSelectPath]);
+    const { listRef, selectedRef, selectCard, hoverCard, leaveList } = useCardList({
+        paths, currentId, onSelectPath, onHoverPath, orderKey: `${sortBy}|${sortAscending}`,
+    });
     const cardActions = useRef({});
-    cardActions.current = { onToggleFavorite, onDownloadGpx };
+    cardActions.current = { onToggleFavorite, onDownloadGpx, onOpenSet: combined?.onOpenSet };
     const toggleFavoriteCard = useCallback((path) => cardActions.current.onToggleFavorite?.(path), []);
     const downloadGpxCard = useCallback((path) => cardActions.current.onDownloadGpx?.(path), []);
-    useLayoutEffect(() => {
-        const list = listRef.current;
-        const card = selectedRef.current;
-        const clicked = clickedId.current != null && clickedId.current === currentId;
-        clickedId.current = null;
-        if (!list || !card) return;
-        if (clicked) {
-            revealUnderPointer(list, card, pointerAt.current?.y);
-            return;
-        }
-        const top = card.offsetTop - (list.clientHeight - card.offsetHeight) / 2;
-        const target = Math.max(0, Math.min(top, list.scrollHeight - list.clientHeight));
-        // Scroll even when the list seems to be there already: a glide from an
-        // earlier change may still be running (and can read as being at the
-        // target for a moment); a new scroll replaces it.
-        // Glide to a nearby card; jump when it is far (a long glide is slow and disorienting).
-        const far = Math.abs(list.scrollTop - target) > list.clientHeight * 1.5;
-        if (typeof list.scrollTo === 'function') list.scrollTo({ top: target, behavior: far ? 'auto' : 'smooth' });
-        else list.scrollTop = target;
-        // Only when the selection or the order changes: new routes streaming in
-        // must not pull the list away from where the user scrolled.
-    }, [currentId, sortBy, sortAscending]);
-
-    // Map preview of the card under the pointer. Crossing the gap between two
-    // cards keeps the last one (no flicker); leaving the list ends it. Only a
-    // real pointer move previews: when the list scrolls a card under a still
-    // pointer (the arrows centre the selected card), the browser
-    // reports mouse events at the same position, and those are ignored. A new
-    // selection ends the preview until the pointer moves again.
-    const previewId = useRef(null);
-    const setPreview = useCallback((id) => {
-        if (previewId.current === id) return;
-        previewId.current = id;
-        onHoverPath?.(id);
-    }, [onHoverPath]);
-    const hoverCard = useCallback((id, e) => {
-        const last = pointerAt.current;
-        if (last && last.x === e.clientX && last.y === e.clientY) return;
-        pointerAt.current = { x: e.clientX, y: e.clientY };
-        setPreview(id);
-    }, [setPreview]);
-    const leaveList = useCallback(() => {
-        pointerAt.current = null;
-        setPreview(null);
-    }, [setPreview]);
-    useEffect(() => {
-        setPreview(null);
-    }, [currentId, setPreview]);
-
-    // The mouse wheel scrolls one card per notch (a trackpad: one card per
-    // card's height of movement), so no card is skipped. Quick notches queue
-    // up. When the scroll settles, the card now under the pointer is
-    // previewed (the wheel moved it there on purpose).
-    const pathsRef = useRef(paths);
-    pathsRef.current = paths;
-    useEffect(() => {
-        const list = listRef.current;
-        if (!list) return undefined;
-        let collected = 0;
-        let target = null; // where the queued steps end
-        let stepping = false;
-        let settleTimer = null;
-        const settle = () => {
-            if (!stepping) return;
-            stepping = false;
-            clearTimeout(settleTimer);
-            target = null;
-            const at = pointerAt.current;
-            if (!at) return;
-            const card = document.elementFromPoint(at.x, at.y)?.closest?.('.route-card');
-            if (!card || !list.contains(card)) return;
-            const path = pathsRef.current.find((p) => String(p.id) === card.dataset.routeId);
-            if (path) setPreview(path.id);
-        };
-        const onWheel = (e) => {
-            if (e.ctrlKey || Math.abs(e.deltaX) > Math.abs(e.deltaY)) return; // pinch zoom, sideways
-            e.preventDefault();
-            let px = e.deltaY;
-            if (e.deltaMode === 1) px *= 40; // lines
-            else if (e.deltaMode === 2) px *= list.clientHeight; // pages
-            collected += px;
-            if (Math.abs(px) < WHEEL_NOTCH_PX && Math.abs(collected) < WHEEL_CARD_PX) return;
-            const dir = Math.sign(collected);
-            collected = 0;
-            const next = nextCardTop(list, target ?? list.scrollTop, dir);
-            if (next == null) return;
-            target = next;
-            stepping = true;
-            if (typeof list.scrollTo === 'function') list.scrollTo({ top: next, behavior: 'smooth' });
-            else list.scrollTop = next;
-            clearTimeout(settleTimer);
-            settleTimer = setTimeout(settle, WHEEL_SETTLE_MS);
-        };
-        list.addEventListener('wheel', onWheel, { passive: false });
-        list.addEventListener('scrollend', settle);
-        return () => {
-            clearTimeout(settleTimer);
-            list.removeEventListener('wheel', onWheel);
-            list.removeEventListener('scrollend', settle);
-        };
-    }, [setPreview]);
-    useEffect(() => () => onHoverPath?.(null), [onHoverPath]);
+    const openSetCard = useCallback((path) => cardActions.current.onOpenSet?.(path), []);
+    const target = combined ? combined.sets.find((s) => s.id === combined.targetId) || null : null;
 
     const activeKeys = new Set(routeFilters.map((f) => f.key));
     const addable = FILTER_METRICS.filter((m) => !activeKeys.has(m.key));
@@ -350,6 +192,10 @@ function GenerationPanel({
                             }}
                             aria-label="Generation name"
                         />
+                    ) : combined ? (
+                        <span className="gen-panel__name gen-panel__name--fixed" title={combined.sets.map((s) => s.name).join(', ')}>
+                            {generation.name}
+                        </span>
                     ) : (
                         <button type="button" className="gen-panel__name" onClick={() => setEditing(true)} title={`${generation.name} (click to rename)`}>
                             {generation.name}
@@ -358,7 +204,7 @@ function GenerationPanel({
                     <div className="gen-panel__sub">
                         {totalCount} {totalCount === 1 ? 'route' : 'routes'}
                         {paths.length !== totalCount && ` · ${paths.length} shown`}
-                        {' · '}{roadsLabel(settings)}
+                        {' · '}{combined ? `${combined.sets.length} sets` : roadsLabel(settings)}
                     </div>
                 </div>
                 {headerActions}
@@ -374,20 +220,24 @@ function GenerationPanel({
                     </button>
                     {menuOpen && (
                         <div className="menu" onMouseLeave={() => setMenuOpen(false)}>
-                            <button type="button" onClick={() => { setMenuOpen(false); setEditing(true); }}>Rename</button>
-                            <button type="button" onClick={() => { setMenuOpen(false); onNewSearchHere(); }} title="Back to the plan with this start and settings: add to this set, or start a new one">Plan again from here</button>
-                            <button type="button" onClick={() => { setMenuOpen(false); setShowSettings((v) => !v); }}>
-                                {showSettings ? 'Hide settings used' : 'Settings used'}
-                            </button>
-                            <button type="button" className="is-danger" onClick={() => { setMenuOpen(false); onDelete(); }}>
-                                <Trash2 size={14} /> Delete
-                            </button>
+                            {!combined && <button type="button" onClick={() => { setMenuOpen(false); setEditing(true); }}>Rename</button>}
+                            <button type="button" onClick={() => { setMenuOpen(false); onNewSearchHere(); }} title="Back to the plan with this start and settings, for a new set (or pick this one there to add to it)">Plan again from here</button>
+                            {!combined && (
+                                <button type="button" onClick={() => { setMenuOpen(false); setShowSettings((v) => !v); }}>
+                                    {showSettings ? 'Hide settings used' : 'Settings used'}
+                                </button>
+                            )}
+                            {!combined && (
+                                <button type="button" className="is-danger" onClick={() => { setMenuOpen(false); onDelete(); }}>
+                                    <Trash2 size={14} /> Delete
+                                </button>
+                            )}
                         </div>
                     )}
                 </div>
             </div>
 
-            {showSettings && (
+            {showSettings && !combined && (
                 <div className="gen-settings">
                     {settingsRows(generation, units).map(([k, v]) => (
                         <div key={k} className="gen-settings__row"><span>{k}</span><span>{v}</span></div>
@@ -522,21 +372,28 @@ function GenerationPanel({
                     </button>
                 </div>
                 <div className="route-list" role="listbox" aria-label="Routes" ref={listRef} onMouseLeave={leaveList}>
-                    {paths.map((path, i) => (
-                        <RouteCard
-                            key={path.id}
-                            ref={path.id === currentId ? selectedRef : undefined}
-                            path={path}
-                            number={i + 1}
-                            selected={path.id === currentId}
-                            onSelect={selectCard}
-                            onHover={hoverCard}
-                            favorite={!!isFavorite && isFavorite(path)}
-                            onToggleFavorite={onToggleFavorite ? toggleFavoriteCard : undefined}
-                            onDownloadGpx={onDownloadGpx ? downloadGpxCard : undefined}
-                            group={compareGroupOf ? compareGroupOf(path) : null}
-                        />
-                    ))}
+                    {paths.map((path, i) => {
+                        const from = combined ? combined.setOf(path) : null;
+                        return (
+                            <RouteCard
+                                key={path.id}
+                                ref={path.id === currentId ? selectedRef : undefined}
+                                path={path}
+                                number={i + 1}
+                                selected={path.id === currentId}
+                                onSelect={selectCard}
+                                onHover={hoverCard}
+                                favorite={!!isFavorite && isFavorite(path)}
+                                onToggleFavorite={onToggleFavorite ? toggleFavoriteCard : undefined}
+                                onDownloadGpx={onDownloadGpx ? downloadGpxCard : undefined}
+                                group={compareGroupOf ? compareGroupOf(path) : null}
+                                fromName={from?.name || null}
+                                fromAlso={from?.also.length ? from.also.map((n) => `“${n}”`).join(' and ') : null}
+                                fromAlsoCount={from?.also.length || 0}
+                                onOpenSet={combined ? openSetCard : undefined}
+                            />
+                        );
+                    })}
                     {empty}
                 </div>
             </div>
@@ -544,6 +401,23 @@ function GenerationPanel({
             <div className="gen-more">
                 {moreOpen && (
                     <div className="gen-more__options">
+                        {combined && (
+                            <label className="gen-more__target">
+                                <span className="section-label">Add to</span>
+                                <select
+                                    className="select"
+                                    value={combined.targetId || ''}
+                                    onChange={(e) => combined.onTarget(e.target.value)}
+                                    aria-label="Set more routes go to"
+                                >
+                                    {combined.sets.map((s) => (
+                                        <option key={s.id} value={s.id}>
+                                            {s.name} ({s.pathCount} {s.pathCount === 1 ? 'route' : 'routes'})
+                                        </option>
+                                    ))}
+                                </select>
+                            </label>
+                        )}
                         <div className="field-row">
                             <span className="section-label">Length</span>
                             <span className="field-value">{low === high ? `${low} ${unit}` : `${low}–${high} ${unit}`}</span>
@@ -604,7 +478,9 @@ function GenerationPanel({
                             type="button"
                             className="btn-primary gen-more__go"
                             onClick={() => onMoreRoutes(more)}
-                            title="Find more routes with these settings, through your green roads and areas (M)"
+                            title={target
+                                ? `Find more routes for “${target.name}” with these settings, through your green roads and areas (M)`
+                                : 'Find more routes with these settings, through your green roads and areas (M)'}
                         >
                             More routes
                         </button>
@@ -614,13 +490,16 @@ function GenerationPanel({
                         className={`gen-more__settings ${moreOpen ? 'is-open' : ''}`}
                         onClick={() => setMoreOpen((o) => !o)}
                         aria-expanded={moreOpen}
-                        title="Length, roads and surface for more routes"
+                        title={target
+                            ? `The set more routes go to (“${target.name}”), and their length, roads and surface`
+                            : 'Length, roads and surface for more routes'}
                     >
                         <span>
                             {low === high ? `${low}` : `${low}–${high}`} {unit} · {roadsShort(more.road_preference)}
                             {surfacePreference(more.surface_preference) !== 'allow'
                                 && ` · ${SURFACE_PREFERENCES.find((p) => p.id === surfacePreference(more.surface_preference)).chip}`}
                         </span>
+                        {target && <span className="gen-more__to">→ {target.name}</span>}
                         <ChevronUp size={14} />
                     </button>
                 </div>

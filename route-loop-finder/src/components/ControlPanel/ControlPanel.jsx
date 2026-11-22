@@ -1,11 +1,11 @@
 import { useEffect, useState } from 'react';
-import { ChevronRight, Maximize2, Minimize2, SlidersHorizontal } from 'lucide-react';
+import { ChevronRight, Maximize2, Minimize2, SlidersHorizontal, Star } from 'lucide-react';
 import './ControlPanel.css';
 
 import PlanCard from './PlanCard';
 import AdvancedSettings from './AdvancedSettings';
 import GenerationsList from './GenerationsList';
-import FavoritesList from './FavoritesList';
+import FavoritesPage from './FavoritesPage';
 import BoundaryEditor from './BoundaryEditor';
 import GenerationPanel from './GenerationPanel';
 import ViewOptions from './ViewOptions';
@@ -14,8 +14,9 @@ import ViewOptions from './ViewOptions';
  * The panel on the right, sized to fit the window without scrolling (only
  * lists scroll, inside their own boxes).
  * - No generation open: the plan (start, length, roads, through / avoid,
- *   Find loops), "Your loops", and Advanced settings at the bottom, which
- *   opens as a page over the whole panel.
+ *   Find loops), "Your loops" with the Favorites button beside it, and
+ *   Advanced settings at the bottom, which opens as a page over the whole panel.
+ * - The Favorites page (FavoritesPage): every favorite, over the whole panel.
  * - A generation open: its routes (GenerationPanel).
  */
 function ControlPanel({
@@ -46,16 +47,16 @@ function ControlPanel({
     onChooseStart,
     onRenameGeneration,
     onHoverGeneration,
-    planTab = 'loops', // 'loops' | 'favorites'
-    onPlanTab,
-    favoritesProps = null, // FavoritesList's props (every favorite, grouped by start)
+    favoritesPage = null, // FavoritesPage's props while the Favorites page is open
+    favoriteCount = 0, // every favorite (the plan's Favorites button)
+    onOpenFavorites, // open the Favorites page
     boundaryProps = null, // the plan's search area: PlanCard's boundary props
     boundaryEditor = null, // a boundary being drawn or edited: BoundaryEditor's props (its own page)
 }) {
     const [minimized, setMinimized] = useState(false);
     const [advancedOpen, setAdvancedOpen] = useState(false);
     const showGeneration = mode === 'display' && activeGeneration;
-    const title = showGeneration ? activeGeneration.name : 'Plan a loop';
+    const title = showGeneration ? activeGeneration.name : favoritesPage ? 'Favorites' : 'Plan a loop';
 
     // A generation opening (even one started from the Advanced page, with
     // Enter) closes Advanced: going back from it shows the plan.
@@ -130,6 +131,14 @@ function ControlPanel({
         );
     }
 
+    if (favoritesPage) {
+        return (
+            <div className="control-panel control-panel--full">
+                <FavoritesPage {...favoritesPage} headerActions={actions} toolsProps={toolsProps} />
+            </div>
+        );
+    }
+
     if (boundaryEditor && !showGeneration) {
         return (
             <div className="control-panel control-panel--full">
@@ -175,26 +184,25 @@ function ControlPanel({
                     boundary={boundaryProps}
                 />
             </div>
-            {(generations.length > 0 || favoritesProps?.total > 0) && (
+            {(generations.length > 0 || favoriteCount > 0) && (
                 <div className="panel-section panel-section--grow">
-                    <div className="plan-tabs" role="tablist" aria-label="Your loops or every favorite">
-                        {[['loops', 'Your loops', generations.length], ['favorites', 'Favorites', favoritesProps?.total || 0]].map(([id, label, count]) => (
-                            <button
-                                key={id}
-                                type="button"
-                                role="tab"
-                                aria-selected={planTab === id}
-                                className={planTab === id ? 'is-active' : ''}
-                                onClick={() => onPlanTab?.(id)}
-                            >
-                                {label}
-                                <span className="plan-tabs__count">{count}</span>
-                            </button>
-                        ))}
+                    <div className="plan-lists__head">
+                        <span className="section-label">
+                            Your loops <span className="plan-lists__count">{generations.length}</span>
+                        </span>
+                        <button
+                            type="button"
+                            className="fav-open-btn"
+                            onClick={onOpenFavorites}
+                            title="Every favorite route, on its own page: sort, group, filter, step through them"
+                        >
+                            <Star size={13} fill="currentColor" />
+                            <span>Favorites</span>
+                            <span className="fav-open-btn__count">{favoriteCount}</span>
+                            <ChevronRight size={14} />
+                        </button>
                     </div>
-                    {planTab === 'favorites' ? (
-                        <FavoritesList {...favoritesProps} />
-                    ) : (
+                    {generations.length > 0 ? (
                         <GenerationsList
                             generations={generations}
                             onOpen={onOpenGeneration}
@@ -203,6 +211,8 @@ function ControlPanel({
                             onHover={onHoverGeneration}
                             showHeader={false}
                         />
+                    ) : (
+                        <div className="gen-empty">No loops yet: set a start and press Find loops.</div>
                     )}
                 </div>
             )}

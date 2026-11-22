@@ -178,9 +178,7 @@ html:root[data-style='classic'][data-theme='dark'] {
 [data-style='classic'] .filter__value,
 [data-style='classic'] .filter__note,
 [data-style='classic'] .route-card__main strong,
-[data-style='classic'] .fav-row__main strong,
 [data-style='classic'] .route-card__climb,
-[data-style='classic'] .fav-row__climb,
 [data-style='classic'] .route-card__details dd,
 [data-style='classic'] .gen-more__settings,
 [data-style='classic'] .elevation-window__summary,
@@ -354,17 +352,8 @@ html:root[data-style='classic'][data-theme='dark'] {
   box-shadow: none;
 }
 
-[data-style='classic'] .plan-tabs__count,
-[data-style='classic'] .plan-tabs button.is-active .plan-tabs__count {
-  min-width: 0;
-  padding: 0;
-  background: none;
-  font-size: 12px;
-  color: var(--color-text-muted);
-}
-
-[data-style='classic'] .fav-row.is-selected {
-  background: var(--color-favorite-light);
+[data-style='classic'] .fav-open-btn {
+  border-radius: var(--radius-md);
 }
 
 /* ---- on the map ---- */

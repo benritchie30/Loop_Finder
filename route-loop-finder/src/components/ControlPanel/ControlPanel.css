@@ -138,7 +138,7 @@
     flex-direction: column;
 }
 
-.panel-section--grow > .plan-tabs {
+.panel-section--grow > .plan-lists__head {
     flex: 0 0 auto;
     margin-bottom: 8px;
 }
@@ -1039,12 +1039,14 @@
 /* Thin scrollbars for the lists inside the panel (and the other floating sheets) */
 .control-panel ::-webkit-scrollbar,
 .shortcuts ::-webkit-scrollbar,
+.set-menu ::-webkit-scrollbar,
 .search-box ::-webkit-scrollbar {
     width: 8px;
 }
 
 .control-panel ::-webkit-scrollbar-thumb,
 .shortcuts ::-webkit-scrollbar-thumb,
+.set-menu ::-webkit-scrollbar-thumb,
 .search-box ::-webkit-scrollbar-thumb {
     background: var(--color-border-strong);
     border-radius: 4px;
@@ -1052,12 +1054,14 @@
     background-clip: padding-box;
 }
 
-.control-panel ::-webkit-scrollbar-thumb:hover {
+.control-panel ::-webkit-scrollbar-thumb:hover,
+.set-menu ::-webkit-scrollbar-thumb:hover {
     background-color: var(--color-text-faint);
 }
 
 .control-panel ::-webkit-scrollbar-track,
 .shortcuts ::-webkit-scrollbar-track,
+.set-menu ::-webkit-scrollbar-track,
 .search-box ::-webkit-scrollbar-track {
     background: transparent;
 }

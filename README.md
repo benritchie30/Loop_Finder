@@ -8,6 +8,8 @@ favorite and refine those loops.
 - **Live results**: routes arrive one by one over a WebSocket while the search runs.
 - **Sort and filter**: length, climb rate, total climb, difficulty, loop share, % unpaved,
   discomfort (road stress), similarity; an elevation chart and sparkline for every route.
+- **Every route from one start**: a pin where several searches started lists them, and shows all
+  their routes as one list (a route found twice, once), each named by its search.
 - **Steer the search**: paint roads or draw areas (circle, box, freeform) the routes must go
   through or avoid, then ask for **More routes**. New routes never repeat earlier ones.
 - **Surface preference**: Paved only, Allow gravel or Prefer gravel, for a search and for more routes.
@@ -17,6 +19,9 @@ favorite and refine those loops.
 - **GPX export**: download any route to import into Ride with GPS, Strava, Komoot, Garmin or
   Wahoo, with elevation, the way you chose to ride it.
 - **Custom search boundaries**: draw the region routes must stay inside.
+- **Favorites page**: every favorite route on one page and on the map, sorted (date favorited,
+  best, length, climb...), grouped by search, by start or not at all, filtered (measures, painted
+  roads, only those in the map's view), stepped through with the arrows.
 - **Favorites and history**: every generation and favorite is saved in your browser
   (IndexedDB). No accounts; the server keeps nothing about you.
 
@@ -83,6 +88,11 @@ is listed in [RUNNING.md](RUNNING.md).
 
 ## Testing
 
+`bash run.sh` (Linux / macOS, from the project folder) sets everything up in the project folder
+(`venv/`, `node_modules/`) and runs the logic tests, lint, build and backend tests; `--e2e` adds
+the browser check, `--all` the public-server checks too, `--skip-install` only runs them
+(`bash run.sh --help`). Or one at a time:
+
 | Check | Command | Where |
 |---|---|---|
 | Frontend logic tests (Vitest) | `npm test` | `route-loop-finder/` |
@@ -90,6 +100,7 @@ is listed in [RUNNING.md](RUNNING.md).
 | Backend tests | `python -m unittest discover -s tests` | `backend/` |
 | End-to-end browser check | `python tools/check_frontend.py` | `backend/` |
 | Public-server limits and load | `python tools/check_limits.py`, `python tools/check_load.py` | `backend/` |
+| UI speed with many routes | `python tools/bench_ui.py` | `backend/` |
 
 The browser check drives the real app in headless Chromium against the bundled map tiles
 (Boone, NC and Charlotte, NC) and needs `pip install -r backend/requirements-dev.txt`. Details and

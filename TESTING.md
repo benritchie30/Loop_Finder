@@ -14,6 +14,20 @@ and `route-loop-finder/`). On Windows, activate with `venv\Scripts\activate` ins
 
 ---
 
+## All at once: `run.sh`
+
+```bash
+bash run.sh                  # set up (once), then logic tests, lint, build, backend tests
+bash run.sh --e2e            # ...and the browser check (downloads Playwright's Chromium the first time)
+bash run.sh --all            # ...and check_limits.py, check_load.py
+bash run.sh --skip-install   # only the checks
+bash run.sh --e2e-only --only sets,favorites --area city   # only the browser check, with its options
+```
+
+It installs into the project folder only (`venv/`, `route-loop-finder/node_modules/`), prints a
+summary, and exits with 0 only when every check passed. `CHECK_BROWSER=/path/to/chrome` picks
+the browser for the browser check.
+
 ## 1. Set up (once)
 
 ```bash
@@ -112,6 +126,29 @@ variable) if given, else a Chrome for Testing / Chromium already on the machine 
 `~/.cache/puppeteer/`, `~/.cache/ms-playwright/` and the usual install places), and prints
 which.
 
+### How fast the UI responds with many routes (`bench_ui.py`)
+
+```bash
+cd backend
+python tools/bench_ui.py                          # 240 routes, 150 of them favorites: production build, then dev server
+python tools/bench_ui.py --ui prod --no-gpu       # the production build, as on a machine without GPU acceleration
+python tools/bench_ui.py --spread                 # favorites that share no road (as from many places)
+python tools/bench_ui.py --profile --trace        # also what the time goes to: functions, and the browser's own work
+python tools/bench_ui.py --label after --json bench_out/after.json   # keep the numbers to compare
+```
+
+It times the main thread's CPU work (Chrome's ThreadTime) of each step: the next route
+(arrow key) and a route card under the pointer in one large generation, and the next
+favorite and a favorite card under the pointer on the Favorites page, each many times after a
+few untimed ones, and prints the mean, median, 90th percentile and worst. The routes are made
+once by the app (Charlotte, same servers as the browser check) and kept in
+`backend/bench_out/ui_bench_routes.json` (`--fresh` makes them again), so runs before and after
+a change time the same routes. The production build is made with `VITE_EXPOSE_STATE=1` (the
+app's state for the tool, `utils/devHooks.js`; never in the deployed build). Headless Chromium
+has no GPU: by default it gets one in software (SwiftShader), as canvases are handled on a
+machine with a GPU; `--no-gpu` times one without. The numbers move a little from run to run:
+compare medians of a few runs.
+
 ---
 
 ## 3. What the checks cover
@@ -125,8 +162,19 @@ which.
   roads turned back on and off), a red road inside a green area;
 - double-click hit testing (painted roads, area outlines);
 - the shared hover helper (one update per frame, only changes, clean up);
-- generations that share a start (one pin, the same start within 20 m, length ranges), and
-  favorites grouped by start (the generation a group opens, a deleted one, no start);
+- generations that share a start (one pin, the same start within 20 m, length ranges, a pin's
+  menu newest first, the plan's start choice: New set unless a set is picked for this pin);
+- the Favorites page's list: where a favorite starts (saved, else its route's first point), its
+  route's box; sorting by Date favorited (newest first), Best (a favorite whose set is gone
+  last), a measure; grouping by set (a deleted one by its saved name), by start (the set Open
+  opens: its own, else another there, else none), none; groups near the view first, each part
+  by its top card in the sort (by Length reversed, the longest route's group first); the
+  measure filters and In map view; the arrows' order; focus on one group or one start;
+- short dates (today the time, this year the day, else with the year);
+- the Favorites page's road pieces: only for favorites in or near the view (another city loads
+  nothing), zoomed far out only those in view or none ("zoom in"), loading until all have come;
+- all routes from one start (Best taking turns between the sets, newest first; a route found by
+  two sets, either way round, listed once; every route's set; a route without a line);
 - route identity for favorites (the same route in another generation or ridden the other way is
   the same favorite; another route is not);
 - custom boundaries (valid shapes, keys, inside any shape, bounds, a drawn outline simplified to
@@ -205,22 +253,51 @@ the idle time (30 s here) generations and areas are dropped and memory is given 
 - *favorites*: S makes the shown route a favorite, drawn in the favorite colour (the theme
   colour's complement) with its card marked; a card's star favorites its route without selecting
   it; faint favorites look like the other faint routes (one canvas draws the faint routes; on the
-  dev server it records the colours and number of lines it draws), a favorite previewed from its card is in
+  dev server it records the colours and number of lines it draws, halos marked apart), a favorite previewed from its card is in
   the favorite colour; Favorites lists only the favorites (staying on the shown one), an unfavorited route stays
   listed while shown and is gone at the next; favorites are kept after a reload and after
   deleting their generation, and marked again when it is reopened;
-- *sets*: a generation is named after its place only; Plan again from here offers to add to it
-  (chosen, the plan still fits) and Add loops adds routes to the same generation; New set makes
+- *sets*: a generation is named after its place only; Plan again from here goes to the plan with
+  New set chosen and the generation listed (the plan still fits), and picking it there, Add loops
+  adds routes to the same generation; a start pin
+  placed by hand on a set's start chooses New set (picking the set makes it Add loops); clicking
+  the grey pin of one set opens its menu, not the set, and its New set from here goes to the
+  plan with the pin on that start, New set chosen and nothing searched; that makes
   "<place> 2" (routes favorited in the first that it finds again are favorites there too), both
-  share one pin whose menu lists and opens them; hovering a row in Your loops
+  share one pin whose menu lists them newest first and opens them; a long list scrolls in the
+  menu and the wheel there does not zoom the map; the menu closes at a click on the map (which
+  places no start pin; the next one does), on the panel, on a panel button (which still acts) or
+  a map button (zoom in), at Esc, and at its pin again; with a set open, a click on a route only
+  closes it (the next shows that route); from an open set, the pin's New set from here
+  goes back to the plan at that start; a pin with one set has no Show all routes from here, one
+  with two has: it lists every route of both sets, a route both found once, Best taking turns
+  between the sets (newest first), every card naming its set, with no Rename, Settings used or
+  Delete; More routes adds to the newest set or the one chosen in its options (the list stays
+  all routes from here); a card's set name opens that set by itself on the same route;
+  hovering a row in Your loops
   highlights its pin without moving the map, leaving the list ends it; a generation can be
   renamed in Your loops; clicking a row opens it and centres the map on its pin beside the panel;
-- *all_favorites*: the plan's Favorites tab hides the start pin (a click away from favorites does
-  not move it), lists every favorite grouped by start and draws them on the map (the plan still
-  fits); the Road tool works there without a start, a road painted on a favorite keeps it listed,
-  and the tab keeps its own painted roads (the plan's stay apart); clicking one selects it, bold in the favorite colour, with its
-  elevation (no Reverse); the arrows step; a painted area filters them and undoing it brings them
-  back; a group's Open opens its generation in favorites only, and the tab is still open after;
+- *all_favorites*: the plan's Favorites button opens the Favorites page, which hides the start
+  pin (a click away from favorites does not move it), lists every favorite and draws them on the
+  map, with a star pin per start counting its favorites in place of the sets' pins (the page
+  fits; Esc on the map deselects even after pin menus were used); sorted by Date favorited,
+  newest first, with Best among the sorts; by Length, longest first, the groups in that order
+  too, and Length chosen again runs the way it last did; focus: a selected favorite shows only
+  its group's faint routes with its start pin orange, a card or header of another group under
+  the pointer shows that group's (its pin orange), the pointer gone the selected one's again, a
+  click on a hidden route or on empty map deselects (every faint route back), so does Esc, a
+  star pin under the pointer shows its start's and lights its headers; grouped by start, Open
+  opens all routes from there, favorites only; clicking one selects
+  it, bold in the favorite colour, with its elevation (no Reverse) and "Favorite 1 of n"; the
+  arrows and the ‹ button step; sorting by Best keeps the one shown; grouped by set, by start or
+  none (each card then names its set); a group folds; groups near the view are marked (moved
+  away, none is); In map view lists only those in view; the app bringing a favorite into view
+  does not reorder the groups; a star pin's menu shows its favorites; the Road tool works there
+  without a start, a road painted on a favorite keeps it listed (its road pieces load only for
+  favorites in or near the view: none far from them, the tool saying so; back at them they are
+  there; while they come it says "Loading roads…"), and the page keeps its own painted roads (the
+  plan's stay apart; Backspace goes back); a painted area filters them and undoing it brings them
+  back; a group's Open opens its generation in favorites only, and the page is still open after;
 - *boundary*: New boundary opens the editor; a dragged box joins it with handles, dragging a
   corner resizes it; a freehand shape is simplified to a few points that can be dragged and
   removed by double-click; shapes can be added and removed; Enter saves it and the plan uses it
