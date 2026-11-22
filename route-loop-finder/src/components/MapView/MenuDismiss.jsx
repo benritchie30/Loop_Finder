@@ -15,8 +15,8 @@ function isSetPin(el) {
  *   pin, show a route or paint a road (it is stopped before Leaflet sees it);
  * - anywhere else (the panel, the map's buttons, the search box, the
  *   elevation chart): the menu closes and the click does what it does;
- * - on a generation pin, Leaflet's own: the same pin closes its menu,
- *   another one opens its own instead.
+ * - on a set's pin: the menu closes and the click opens that pin's routes
+ *   (a right-click on a pin opens its own menu instead).
  * Dragging the map (panning) leaves it open, as does the wheel. Esc closes
  * it and does nothing else.
  */
@@ -38,7 +38,11 @@ function MenuDismiss() {
             const el = popup?.getElement();
             if (!popup || !el) return;
             const { target } = e;
-            if (el.contains(target) || isSetPin(target)) return;
+            if (el.contains(target)) return;
+            if (isSetPin(target)) {
+                map.closePopup();
+                return;
+            }
             const moved = !!down && Math.hypot(e.clientX - down.x, e.clientY - down.y) > CLICK_SLOP_PX;
             if (moved && onMap(target)) return; // the end of a drag of the map
             map.closePopup();

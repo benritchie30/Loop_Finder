@@ -15,8 +15,8 @@ Steps timed, each many times after a few untimed ones (the mean, median, 90th
 percentile and worst are printed):
   - the route view of one large generation: the next route (arrow key), and
     the pointer moving from one route card to another (a map preview);
-  - the Favorites tab with many favorites: the next favorite, and a row under
-    the pointer.
+  - the plan: the pointer coming onto the generation's start pin (its routes
+    previewed on the map, the other pins hidden) after leaving it.
 
 The routes are made once, by the app (Charlotte, the city area of the checks),
 and kept in backend/bench_out/ui_bench_routes.json, so runs before and after a
@@ -284,32 +284,19 @@ async def run(browser, record, n_routes, n_favs, steps):
     await page.mouse.move(panel['x'] - 300, panel['y'] + 300)
     await page.wait_for_timeout(300)
 
-    # ---- the Favorites tab
+    # ---- the plan: the start pin under the pointer previews its routes
     await page.keyboard.press('Backspace')
     await cf.wait_state(page, "s.mode === 'input'", 5000)
-    await page.locator('.fav-open-btn').click()
-    await cf.wait_state(page, 's.favoritesShown > 0', 10000)
-    await page.wait_for_timeout(2500)
-    print(f"Favorites tab: {await cf.state(page, 's.favoritesShown')} favorites")
-    await page.locator('.fav-page .route-card').first.click()
-    await page.mouse.move(panel['x'] - 300, panel['y'] + 300)
     await page.wait_for_timeout(800)
-    name = 'next favorite (arrow key)'
-    results[name] = await measure(page, cdp, steps, lambda i: page.keyboard.press('ArrowDown'), name)
+    pbox = await page.locator('.leaflet-marker-icon.custom-marker-icon').first.bounding_box()
+    pin_at = (pbox['x'] + pbox['width'] / 2, pbox['y'] + pbox['height'] / 2)
 
-    async def hover_row(i):
-        # two rows in view that are not the selected one (the list scrolled to the top if none is)
-        spots = await page.evaluate("""() => {
-            const list = document.querySelector('.fav-page__list'); const box = list.getBoundingClientRect();
-            const seen = () => [...list.querySelectorAll('.route-card:not(.is-selected)')].map((r) => r.getBoundingClientRect())
-              .filter((r) => r.top >= box.top && r.bottom <= box.bottom).map((r) => ({ x: r.left + r.width / 2, y: r.top + r.height / 2 }));
-            let rows = seen();
-            if (rows.length < 2) { list.scrollTop = 0; rows = seen(); }
-            return rows.slice(0, 2); }""")
-        spot = spots[i % len(spots)]
-        await page.mouse.move(spot['x'], spot['y'] + (i % 3))
-    name = 'favorite card under the pointer'
-    results[name] = await measure(page, cdp, steps, hover_row, name)
+    async def hover_pin(i):
+        await page.mouse.move(pin_at[0] - 200, pin_at[1] + 120)  # off it: the preview ends
+        await page.wait_for_timeout(60)
+        await page.mouse.move(pin_at[0], pin_at[1] + (i % 3))  # onto it: previewed after a short rest
+    name = 'start pin under the pointer (its routes previewed)'
+    results[name] = await measure(page, cdp, steps, hover_pin, name)
 
     await context.close()
     if errors:

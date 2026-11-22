@@ -11,6 +11,7 @@ import { SURFACE_PREFERENCES, surfacePreference } from '../../utils/surface';
 import { roadsLabel, settingsRows } from '../../utils/generationSettings';
 import ComparePanel from './ComparePanel';
 import { useCardList } from '../../hooks/useCardList';
+import { ALL_SETS } from '../../utils/combinedSets';
 import {
     displayToMiles,
     distanceUnit,
@@ -41,6 +42,7 @@ function GenerationPanel({
     generation,
     paths,
     totalCount,
+    chosenTotal = null, // all routes from here: the chosen sets' routes
     currentPath,
     onSelectPath,
     onHoverPath,
@@ -76,13 +78,24 @@ function GenerationPanel({
     favoriteCount = 0, // favorite routes in this generation
     compareProps = null, // dev (LOOP_DEV=1): { candidates, compare, onStart, onView, onSwap, onEnd }
     compareGroupOf = null, // (route) => 'a' | 'b' | 'shared' | null, comparing
-    // All routes from here: { sets (newest first), targetId, onTarget(id), setOf(route), onOpenSet(route) }.
-    // No rename, delete or settings used; each card names its set (a click opens it by itself);
-    // More routes adds to the set chosen in its options.
+    // All routes from here: { sets (newest first), chips, chosenId, onChoose(id), onHoverChip(id),
+    // targetId, onTarget(id), setOf(route), onOpenSet(route) }. No rename, delete or settings
+    // used; set chips (All, each set) narrow the list to one set, and one under the pointer
+    // shows only its routes on the map; each card names its set (a click opens it by itself);
+    // More routes adds to the set chosen in its options (or the chip chosen).
     combined = null,
 }) {
     const units = useUnits();
     const settings = generation.settings || {};
+    // The kept set (utils/keptSets): favorites from deleted sets. No rename,
+    // settings, Plan again or More routes; Remove unfavorites them (App asks first).
+    const kept = !!generation.kept && (!combined || !!combined.chosenId);
+    // All routes from here with All chosen: no rename, settings or delete. With a
+    // set's chip chosen, the header is that set's (generation is it).
+    const allView = !!combined && !combined.chosenId;
+    const chosenIds = combined?.chosenIds || [];
+    // (the chosen sets' routes, a route two of them found once)
+    const listedTotal = combined && chosenIds.length ? chosenTotal ?? totalCount : totalCount;
     const unit = distanceUnit(units);
     const [sliderMin, sliderMax] = lengthSliderRange(units);
 
@@ -119,6 +132,10 @@ function GenerationPanel({
     const index = currentPath ? paths.findIndex((p) => p.id === currentPath.id) : -1;
     const currentFav = !!currentPath && !!isFavorite && isFavorite(currentPath);
 
+    const startEditing = () => {
+        setDraftName(generation.name);
+        setEditing(true);
+    };
     const commitName = () => {
         setEditing(false);
         if (draftName.trim() && draftName.trim() !== generation.name) onRename(draftName);
@@ -192,19 +209,22 @@ function GenerationPanel({
                             }}
                             aria-label="Generation name"
                         />
-                    ) : combined ? (
-                        <span className="gen-panel__name gen-panel__name--fixed" title={combined.sets.map((s) => s.name).join(', ')}>
+                    ) : allView || kept ? (
+                        <span
+                            className="gen-panel__name gen-panel__name--fixed"
+                            title={allView ? combined.sets.map((s) => s.name).join(', ') : 'Favorites whose sets were deleted'}
+                        >
                             {generation.name}
                         </span>
                     ) : (
-                        <button type="button" className="gen-panel__name" onClick={() => setEditing(true)} title={`${generation.name} (click to rename)`}>
+                        <button type="button" className="gen-panel__name" onClick={startEditing} title={`${generation.name} (click to rename)`}>
                             {generation.name}
                         </button>
                     )}
                     <div className="gen-panel__sub">
-                        {totalCount} {totalCount === 1 ? 'route' : 'routes'}
-                        {paths.length !== totalCount && ` · ${paths.length} shown`}
-                        {' · '}{combined ? `${combined.sets.length} sets` : roadsLabel(settings)}
+                        {listedTotal} {listedTotal === 1 ? 'route' : 'routes'}
+                        {paths.length !== listedTotal && ` · ${paths.length} shown`}
+                        {' · '}{allView ? (chosenIds.length > 1 ? `${chosenIds.length} of ${combined.sets.length} sets` : `${combined.sets.length} sets`) : kept ? 'favorites of deleted sets' : roadsLabel(settings)}
                     </div>
                 </div>
                 {headerActions}
@@ -220,16 +240,21 @@ function GenerationPanel({
                     </button>
                     {menuOpen && (
                         <div className="menu" onMouseLeave={() => setMenuOpen(false)}>
-                            {!combined && <button type="button" onClick={() => { setMenuOpen(false); setEditing(true); }}>Rename</button>}
-                            <button type="button" onClick={() => { setMenuOpen(false); onNewSearchHere(); }} title="Back to the plan with this start and settings, for a new set (or pick this one there to add to it)">Plan again from here</button>
-                            {!combined && (
+                            {!allView && !kept && <button type="button" onClick={() => { setMenuOpen(false); startEditing(); }}>Rename</button>}
+                            {!kept && <button type="button" onClick={() => { setMenuOpen(false); onNewSearchHere(); }} title="Back to the plan with this start and settings, for a new set (or pick this one there to add to it)">Plan again from here</button>}
+                            {!allView && !kept && (
                                 <button type="button" onClick={() => { setMenuOpen(false); setShowSettings((v) => !v); }}>
                                     {showSettings ? 'Hide settings used' : 'Settings used'}
                                 </button>
                             )}
-                            {!combined && (
-                                <button type="button" className="is-danger" onClick={() => { setMenuOpen(false); onDelete(); }}>
-                                    <Trash2 size={14} /> Delete
+                            {!allView && (
+                                <button
+                                    type="button"
+                                    className="is-danger"
+                                    onClick={() => { setMenuOpen(false); onDelete(); }}
+                                    title={kept ? 'Unfavorite all of these routes (they go for good)' : undefined}
+                                >
+                                    <Trash2 size={14} /> {kept ? 'Remove' : 'Delete'}
                                 </button>
                             )}
                         </div>
@@ -237,10 +262,40 @@ function GenerationPanel({
                 </div>
             </div>
 
-            {showSettings && !combined && (
+            {showSettings && !allView && (
                 <div className="gen-settings">
                     {settingsRows(generation, units).map(([k, v]) => (
                         <div key={k} className="gen-settings__row"><span>{k}</span><span>{v}</span></div>
+                    ))}
+                </div>
+            )}
+
+            {combined?.chips?.length > 1 && (
+                <div className="set-chips" role="group" aria-label="Sets from here" onMouseLeave={() => combined.onHoverChip?.(null)}>
+                    <button
+                        type="button"
+                        className={`set-chip ${!chosenIds.length ? 'is-on' : ''}`}
+                        aria-pressed={!chosenIds.length}
+                        onClick={() => combined.onChoose(null)}
+                        onMouseEnter={() => combined.onHoverChip?.(ALL_SETS)}
+                        title="Every set's routes"
+                    >
+                        <span>All</span>
+                        <span className="set-chip__count">{favoritesOnly ? favoriteCount : totalCount}</span>
+                    </button>
+                    {combined.chips.map((s) => (
+                        <button
+                            key={s.id}
+                            type="button"
+                            className={`set-chip ${chosenIds.includes(s.id) ? 'is-on' : ''}`}
+                            aria-pressed={chosenIds.includes(s.id)}
+                            onClick={(e) => combined.onChoose(s.id, e.ctrlKey || e.metaKey)}
+                            onMouseEnter={() => combined.onHoverChip?.(s.id)}
+                            title={`Only the routes of “${s.name}” · Ctrl-click to show it with the others chosen (or take it out)`}
+                        >
+                            <span className="set-chip__name">{s.name}</span>
+                            <span className="set-chip__count">{favoritesOnly || s.kept ? s.favoriteCount : s.pathCount}</span>
+                        </button>
                     ))}
                 </div>
             )}
@@ -306,13 +361,13 @@ function GenerationPanel({
                     {filtersOn && (
                         <button type="button" className="link-btn" onClick={onClearFilters}>Clear filters</button>
                     )}
-                    {onFavoritesOnly && (
+                    {onFavoritesOnly && !kept && (
                         <button
                             type="button"
                             className={`fav-toggle ${favoritesOnly ? 'is-on' : ''}`}
                             onClick={() => onFavoritesOnly(!favoritesOnly)}
                             aria-pressed={favoritesOnly}
-                            title={favoritesOnly ? 'Show every route' : 'Show only the favorite routes'}
+                            title={favoritesOnly ? 'Show every route (V)' : 'Show only the favorite routes (V)'}
                         >
                             <Star size={12} fill={favoritesOnly ? 'currentColor' : 'none'} />
                             <span>Favorites</span>
@@ -398,112 +453,114 @@ function GenerationPanel({
                 </div>
             </div>
 
-            <div className="gen-more">
-                {moreOpen && (
-                    <div className="gen-more__options">
-                        {combined && (
-                            <label className="gen-more__target">
-                                <span className="section-label">Add to</span>
-                                <select
-                                    className="select"
-                                    value={combined.targetId || ''}
-                                    onChange={(e) => combined.onTarget(e.target.value)}
-                                    aria-label="Set more routes go to"
-                                >
-                                    {combined.sets.map((s) => (
-                                        <option key={s.id} value={s.id}>
-                                            {s.name} ({s.pathCount} {s.pathCount === 1 ? 'route' : 'routes'})
-                                        </option>
-                                    ))}
-                                </select>
-                            </label>
-                        )}
-                        <div className="field-row">
-                            <span className="section-label">Length</span>
-                            <span className="field-value">{low === high ? `${low} ${unit}` : `${low}–${high} ${unit}`}</span>
-                        </div>
-                        <DualRange
-                            min={sliderMin}
-                            max={sliderMax}
-                            low={low}
-                            high={high}
-                            onChange={(lo, hi) => setMore((m) => ({
-                                ...m,
-                                min_path_len: Number(displayToMiles(lo, units).toFixed(3)),
-                                max_path_len: Number(displayToMiles(hi, units).toFixed(3)),
-                            }))}
-                            label="route length"
-                            format={(v) => `${v} ${unit}`}
-                        />
-                        <div className="segmented segmented--small" role="group" aria-label="Roads for more routes">
-                            {ROAD_PREFERENCES.map((p) => (
-                                <button
-                                    key={p.id}
-                                    type="button"
-                                    className={more.road_preference === p.id ? 'is-active' : ''}
-                                    onClick={() => setMore((m) => ({ ...m, road_preference: p.id }))}
-                                    title={p.hint}
-                                >
-                                    {p.label}
-                                </button>
-                            ))}
-                            {more.road_preference === 'custom' && (
-                                <button type="button" className="is-active" title="Custom road weights">Custom</button>
+            {!kept && (
+                <div className="gen-more">
+                    {moreOpen && (
+                        <div className="gen-more__options">
+                            {combined && (
+                                <label className="gen-more__target">
+                                    <span className="section-label">Add to</span>
+                                    <select
+                                        className="select"
+                                        value={combined.targetId || ''}
+                                        onChange={(e) => combined.onTarget(e.target.value)}
+                                        aria-label="Set more routes go to"
+                                    >
+                                        {combined.sets.filter((s) => !s.kept).map((s) => (
+                                            <option key={s.id} value={s.id}>
+                                                {s.name} ({s.pathCount} {s.pathCount === 1 ? 'route' : 'routes'})
+                                            </option>
+                                        ))}
+                                    </select>
+                                </label>
                             )}
+                            <div className="field-row">
+                                <span className="section-label">Length</span>
+                                <span className="field-value">{low === high ? `${low} ${unit}` : `${low}–${high} ${unit}`}</span>
+                            </div>
+                            <DualRange
+                                min={sliderMin}
+                                max={sliderMax}
+                                low={low}
+                                high={high}
+                                onChange={(lo, hi) => setMore((m) => ({
+                                    ...m,
+                                    min_path_len: Number(displayToMiles(lo, units).toFixed(3)),
+                                    max_path_len: Number(displayToMiles(hi, units).toFixed(3)),
+                                }))}
+                                label="route length"
+                                format={(v) => `${v} ${unit}`}
+                            />
+                            <div className="segmented segmented--small" role="group" aria-label="Roads for more routes">
+                                {ROAD_PREFERENCES.map((p) => (
+                                    <button
+                                        key={p.id}
+                                        type="button"
+                                        className={more.road_preference === p.id ? 'is-active' : ''}
+                                        onClick={() => setMore((m) => ({ ...m, road_preference: p.id }))}
+                                        title={p.hint}
+                                    >
+                                        {p.label}
+                                    </button>
+                                ))}
+                                {more.road_preference === 'custom' && (
+                                    <button type="button" className="is-active" title="Custom road weights">Custom</button>
+                                )}
+                            </div>
+                            <div className="segmented segmented--small" role="group" aria-label="Surface for more routes">
+                                {SURFACE_PREFERENCES.map((p) => (
+                                    <button
+                                        key={p.id}
+                                        type="button"
+                                        className={surfacePreference(more.surface_preference) === p.id ? 'is-active' : ''}
+                                        onClick={() => setMore((m) => ({ ...m, surface_preference: p.id }))}
+                                        title={p.hint}
+                                    >
+                                        {p.label}
+                                    </button>
+                                ))}
+                            </div>
                         </div>
-                        <div className="segmented segmented--small" role="group" aria-label="Surface for more routes">
-                            {SURFACE_PREFERENCES.map((p) => (
-                                <button
-                                    key={p.id}
-                                    type="button"
-                                    className={surfacePreference(more.surface_preference) === p.id ? 'is-active' : ''}
-                                    onClick={() => setMore((m) => ({ ...m, surface_preference: p.id }))}
-                                    title={p.hint}
-                                >
-                                    {p.label}
-                                </button>
-                            ))}
-                        </div>
-                    </div>
-                )}
-                <div className="gen-more__row">
-                    {isGenerating ? (
-                        <div className="busy">
-                            <span className="busy__dot" />
-                            <span className="busy__text">{statusText || `Finding routes… ${totalCount}`}</span>
-                            <button type="button" className="link-btn" onClick={onStop} title="Stop (Esc)">Stop</button>
-                        </div>
-                    ) : (
+                    )}
+                    <div className="gen-more__row">
+                        {isGenerating ? (
+                            <div className="busy">
+                                <span className="busy__dot" />
+                                <span className="busy__text">{statusText || `Finding routes… ${listedTotal}`}</span>
+                                <button type="button" className="link-btn" onClick={onStop} title="Stop (Esc)">Stop</button>
+                            </div>
+                        ) : (
+                            <button
+                                type="button"
+                                className="btn-primary gen-more__go"
+                                onClick={() => onMoreRoutes(more)}
+                                title={target
+                                    ? `Find more routes for “${target.name}” with these settings, through your green roads and areas (M)`
+                                    : 'Find more routes with these settings, through your green roads and areas (M)'}
+                            >
+                                More routes
+                            </button>
+                        )}
                         <button
                             type="button"
-                            className="btn-primary gen-more__go"
-                            onClick={() => onMoreRoutes(more)}
+                            className={`gen-more__settings ${moreOpen ? 'is-open' : ''}`}
+                            onClick={() => setMoreOpen((o) => !o)}
+                            aria-expanded={moreOpen}
                             title={target
-                                ? `Find more routes for “${target.name}” with these settings, through your green roads and areas (M)`
-                                : 'Find more routes with these settings, through your green roads and areas (M)'}
+                                ? `The set more routes go to (“${target.name}”), and their length, roads and surface`
+                                : 'Length, roads and surface for more routes'}
                         >
-                            More routes
+                            <span>
+                                {low === high ? `${low}` : `${low}–${high}`} {unit} · {roadsShort(more.road_preference)}
+                                {surfacePreference(more.surface_preference) !== 'allow'
+                                    && ` · ${SURFACE_PREFERENCES.find((p) => p.id === surfacePreference(more.surface_preference)).chip}`}
+                            </span>
+                            {target && <span className="gen-more__to">→ {target.name}</span>}
+                            <ChevronUp size={14} />
                         </button>
-                    )}
-                    <button
-                        type="button"
-                        className={`gen-more__settings ${moreOpen ? 'is-open' : ''}`}
-                        onClick={() => setMoreOpen((o) => !o)}
-                        aria-expanded={moreOpen}
-                        title={target
-                            ? `The set more routes go to (“${target.name}”), and their length, roads and surface`
-                            : 'Length, roads and surface for more routes'}
-                    >
-                        <span>
-                            {low === high ? `${low}` : `${low}–${high}`} {unit} · {roadsShort(more.road_preference)}
-                            {surfacePreference(more.surface_preference) !== 'allow'
-                                && ` · ${SURFACE_PREFERENCES.find((p) => p.id === surfacePreference(more.surface_preference)).chip}`}
-                        </span>
-                        {target && <span className="gen-more__to">→ {target.name}</span>}
-                        <ChevronUp size={14} />
-                    </button>
+                    </div>
                 </div>
-            </div>
+            )}
         </div>
     );
 }

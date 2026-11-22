@@ -3,11 +3,7 @@ import { useMap } from 'react-leaflet';
 import L from 'leaflet';
 import { coveredRight } from '../../utils/mapPanel';
 
-/**
- * The app moves the map (not the user): marked until the move ends, so
- * MapView's view reports can tell (the Favorites page orders its groups by
- * where the user left the map, not where a selected favorite took it).
- */
+/** The app moves the map (not the user): marked until the move ends. */
 function appMove(map) {
     map._loopAppMove = true;
     map.once('moveend', () => {
@@ -51,8 +47,8 @@ function showInFreeMap(map, bounds) {
 
 /**
  * Map moves asked for by the panel: `centre` ({ lat, lng, n }) centres on a
- * point (a generation opened from a list, a start placed from Favorites);
- * `show` ({ bounds, n }) brings a route into view. `n` makes a repeat act.
+ * point (a generation opened from a list); `show` ({ bounds, n }) brings
+ * routes or a boundary into view. `n` makes a repeat act.
  */
 function MapFocus({ centre = null, show = null }) {
     const map = useMap();

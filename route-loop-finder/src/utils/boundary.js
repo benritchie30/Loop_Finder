@@ -151,7 +151,7 @@ export function shapeLabel(shape, units = 'mi') {
  * null. No route of the max length gets farther from the start than max / 2,
  * so that circle is the boundary when no custom one replaces it.
  *
- * plan: { marker, miles, boundary, editing, favoritesTab } — the start pin,
+ * plan: { marker, miles, boundary, editing } — the start pin,
  * the length slider's max, the chosen custom boundary, the boundary editor.
  * generation: { start, miles, boundary, show } — its pin, the More routes
  * length (what the next search covers), its boundary, the Search boundary
@@ -161,7 +161,7 @@ export function automaticArea(mode, plan, generation) {
     const area = (at, miles) => (at && Number(miles) > 0
         ? { lat: at.lat, lng: at.lng, miles: Number(miles) } : null);
     if (mode === 'input') {
-        if (plan?.favoritesTab || plan?.editing || plan?.boundary) return null;
+        if (plan?.editing || plan?.boundary) return null;
         return area(plan?.marker, plan?.miles);
     }
     if (!generation?.show || generation?.boundary) return null;

@@ -698,8 +698,15 @@ async def favorites_checks(page, area, res, shot):
     await settle(page, 400)
     res.check(f'{area}: ...and after deleting their generation',
               await state(page, f's.favoriteCount === {count} && !s.generations.some((g) => g.id === {json.dumps(set_id)})'))
+    kept = await state(page, "s.generations.find((g) => g.id === 'kept:deleted') || null")
+    toast = await page.locator('.undo-toast').inner_text()
+    res.check(f'{area}: ...kept in "Favorites from deleted sets", and the notice says so',
+              bool(kept) and kept['name'] == 'Favorites from deleted sets' and kept['pathCount'] == count and 'kept' in toast,
+              f'{kept and kept["name"]}, {toast!r}')
     await page.locator('.undo-toast').get_by_role('button', name='Undo').click()
     await settle(page, 400)
+    res.check(f'{area}: ...Undo brings the set back in place of its kept favorites',
+              await state(page, f"s.generations.some((g) => g.id === {json.dumps(set_id)}) && !s.generations.some((g) => g.kept)"))
     await page.locator('.gen-list__open', has=page.get_by_text(name, exact=True)).click()
     await wait_state(page, f"s.mode === 'display' && s.activePathSetId === {json.dumps(set_id)}", 5000)
     await settle(page, 500)
@@ -707,442 +714,147 @@ async def favorites_checks(page, area, res, shot):
     res.check(f'{area}: reopened, its favorite is marked again', shown['routes'] == count and shown['cards'] == count, str(shown))
 
 
-async def open_favorites(page):
-    """The plan's Favorites button: the Favorites page."""
-    await page.locator('.fav-open-btn').click()
-    await wait_state(page, "s.planTab === 'favorites'", 5000)
-    await settle(page, 400)
+async def set_pins(page):
+    """The start pins on the map: [{ label, x, y, lit, star, n }] (x, y: the middle of the pin)."""
+    return await page.evaluate("""() => [...document.querySelectorAll('.leaflet-marker-icon.custom-marker-icon:not(.custom-marker-icon--pending)')]
+        .map((el) => { const r = el.getBoundingClientRect();
+          return { label: el.getAttribute('aria-label') || '', x: r.left + r.width / 2, y: r.top + r.height * 0.35,
+                   lit: /--(favorite-)?highlight/.test(el.className), star: el.classList.contains('custom-marker-icon--star'),
+                   n: Number(el.querySelector('.marker-badge')?.textContent || 0) }; })""")
 
 
-async def all_favorites_checks(page, area, res, shot):
-    """The Favorites page (the plan's Favorites button): every favorite on the map and in
-    a list, sorted (Date favorited, Best...) and grouped (by set, by start, none), groups
-    near the map first, In map view; star pins; select one (bold, elevation, arrows step);
-    the Road tool; painted areas filter them; a group opens its generation in favorites only."""
+async def faint_count(page):
+    return sum(g['lines'] for g in await page.evaluate('() => window.__chk.faintLines()'))
+
+
+async def pins_checks(page, area, res, shot):
+    """The start pins while planning: the pointer resting on one previews its routes (the
+    other pins hidden, a label of what starts there); a click opens them (all routes from
+    here, with a chip per set; a chip narrows the list, one under the pointer shows only its
+    routes); a set in its menu (a right-click) under the pointer previews that set; with a
+    set open only its pin shows; the Favorites switch: only starts with favorites, a star
+    pin counting them, Your loops and the lists only favorites, remembered after a reload."""
     if await state(page, 's.mode') == 'display':
-        if await state(page, 's.favoriteCount') == 0:
-            await page.mouse.move(10, 10)
-            await page.keyboard.press('s')
-            await settle(page, 200)
         await page.keyboard.press('Backspace')
         await settle(page, 400)
-    # More favorites: two routes of each of the newest three sets (another start's too, when
-    # there is one), so the page has several groups and starts.
-    gens = await state(page, 's.generations.slice(0, 3).map((g) => g.name)')
-    for name in gens:
-        await page.locator('.gen-list__open').filter(has=page.get_by_text(name, exact=True)).first.click()
+    if await state(page, 's.favoritesOnly'):
+        await page.locator('.panel-section .fav-toggle').click()
+        await settle(page, 300)
+    await page.mouse.move(10, 10)
+    await settle(page, 300)
+    pins = await set_pins(page)
+    shared = next((p for p in pins if re.match(r'^\d+ sets · ', p['label'])), None)
+    res.check(f'{area}: pins: a start of several sets has a pin', shared is not None, str([p['label'] for p in pins]))
+    if not shared:
+        return
+    at = await page.evaluate("""([x, y]) => { const m = window.__loopMap;
+        const ll = m.containerPointToLatLng(m.mouseEventToContainerPoint({ clientX: x, clientY: y }));
+        return { lat: ll.lat, lng: ll.lng }; }""", [shared['x'], shared['y']])
+    here = await page.evaluate("""() => { const s = window.__loopState, key = window.__routeKey, sets = window.__pathSets;
+        return s.generations.map((g) => ({ id: g.id, name: g.name, n: g.pathCount, at: g.markerPosition,
+          keys: sets[g.id].paths.map(key) })); }""")
+    # (the pin's tip is its start: within a few hundred metres of where the pin is drawn at this zoom)
+    mine = [g for g in here if abs(g['at']['lat'] - at['lat']) < 0.01 and abs(g['at']['lng'] - at['lng']) < 0.01]
+    mine.sort(key=lambda g: g['name'])
+    unique = len({k for g in mine for k in g['keys']})
+
+    # the pointer resting on it: orange, its routes (a route two sets found once), the other pins hidden
+    await page.mouse.move(shared['x'], shared['y'])
+    await settle(page, 500)
+    after = await set_pins(page)
+    drawn = await faint_count(page)
+    tip = page.locator('.leaflet-tooltip.pin-label')
+    label = await tip.inner_text() if await tip.count() else ''
+    res.check(f'{area}: pins: the pointer on a pin previews its routes and hides the other pins (it stays as it is)',
+              len(after) == 1 and not after[0]['lit'] and drawn == unique and 'sets' in label
+              and await page.locator('.custom-marker-icon--pending').count() == 0,
+              f'{len(after)} pins, {drawn} faint routes of {unique}, label {label!r}')
+    await shot('pin_preview')
+    await page.mouse.move(10, 10)
+    await settle(page, 300)
+    res.check(f'{area}: pins: ...moving off brings the pins back and the preview goes',
+              len(await set_pins(page)) == len(pins) and await faint_count(page) == 0)
+
+    # a right-click: its menu; a set there under the pointer previews only that set
+    await page.mouse.click(shared['x'], shared['y'], button='right')
+    await page.locator('.set-menu__item').first.wait_for(state='visible', timeout=5000)
+    item = page.locator('.set-menu__item').nth(1)
+    name = (await item.locator('.set-menu__name').inner_text()).strip()
+    await item.hover()
+    await settle(page, 300)
+    one = next((g for g in mine if g['name'] == name), None)
+    drawn = await faint_count(page)
+    res.check(f'{area}: pins: a right-click opens its menu (not the set); a set there under the pointer previews only it',
+              await state(page, 's.mode') == 'input' and one is not None and drawn == one['n'],
+              f'{name}: {drawn} faint routes of {one and one["n"]}')
+    await page.keyboard.press('Escape')
+    await settle(page, 300)
+
+    # a click: all routes from here, a chip per set
+    await page.mouse.move(10, 10)
+    await page.mouse.click(shared['x'], shared['y'])
+    await wait_state(page, "s.mode === 'display' && !!s.combinedKey", 5000)
+    await settle(page, 500)
+    chips = await page.locator('.set-chip').count()
+    pins_open = await set_pins(page)
+    res.check(f'{area}: pins: a click on a pin of several sets opens all routes from there, with a chip per set (and All)',
+              chips == len(mine) + 1 and await page.locator('.set-chip.is-on').count() == 1, f'{chips} chips for {len(mine)} sets')
+    res.check(f'{area}: pins: ...with a set open, only its start\'s pin shows', len(pins_open) == 1, str(len(pins_open)))
+    total = await state(page, 's.paths.length')
+    some = mine[0]
+    chip = page.get_by_role('button', name=f'Only the routes of “{some["name"]}”', exact=True)
+    await chip.hover()
+    await settle(page, 300)
+    hovered = await faint_count(page)
+    await chip.click()
+    await settle(page, 400)
+    st = await page.evaluate("""(id) => { const s = window.__loopState, sets = window.__pathSets, key = window.__routeKey;
+        const mine = new Set(sets[id].paths.map(key));
+        return { n: s.paths.length, all: s.paths.every((p) => mine.has(key(p))), target: s.activePathSetId }; }""", some['id'])
+    res.check(f'{area}: pins: ...a chip under the pointer shows only its set\'s routes; clicked, the list is only them '
+              f'(More routes adds to it)',
+              hovered <= total and st['all'] and st['n'] <= total and st['target'] == some['id']
+              and 'is-on' in (await chip.get_attribute('class') or ''),
+              f'{hovered} faint while hovered, {st} of {total}')
+    await page.locator('.set-chip').first.click()  # All
+    await settle(page, 300)
+    res.check(f'{area}: pins: ...All lists every route again', await state(page, 's.paths.length') == total)
+    await shot('pin_chips')
+    await page.keyboard.press('Escape')
+    await wait_state(page, "s.mode === 'input'", 5000)
+    await page.mouse.move(10, 10)
+    await settle(page, 300)
+    res.check(f'{area}: pins: Esc closes it, back to the plan with every pin', len(await set_pins(page)) == len(pins))
+
+    # Favorites only: only starts with favorites, a star pin counting them; Your loops the same
+    favs = await page.evaluate("""() => { const s = window.__loopState, key = window.__routeKey, fav = new Set(s.favoriteKeys);
+        return s.generations.map((g) => ({ id: g.id, n: window.__pathSets[g.id].paths.filter((p) => fav.has(key(p))).length })); }""")
+    with_favs = [g for g in favs if g['n'] > 0]
+    await page.mouse.move(10, 10)
+    await page.keyboard.press('v')
+    await settle(page, 400)
+    star_pins = await set_pins(page)
+    rows = await page.locator('.gen-list__row').count()
+    res.check(f'{area}: pins: Favorites (V) shows only the starts with favorites, their usual pins counting them, '
+              f'and Your loops only the sets with favorites',
+              await state(page, 's.favoritesOnly') and len(star_pins) >= 1 and all(not p['star'] and p['n'] > 0 for p in star_pins)
+              and len(star_pins) <= len(pins) and rows == len(with_favs),
+              f"{[(p['label'], p['n']) for p in star_pins]}, {rows} rows for {len(with_favs)} sets with favorites")
+    await shot('favorites_pins')
+    if star_pins:
+        await page.mouse.click(star_pins[0]['x'], star_pins[0]['y'])
         await wait_state(page, "s.mode === 'display'", 5000)
         await settle(page, 400)
-        for _ in range(2):
-            star = page.locator('.route-card:not(.is-favorite) .route-card__star')
-            if await star.count():
-                await star.first.click()
-                await settle(page, 150)
-        await page.keyboard.press('Backspace')
-        await settle(page, 400)
-    total = await state(page, 's.favoriteCount')
-    # a start pin in the plan (Your loops)...
-    spot = await page.evaluate("""() => { const r = window.__loopMap.getContainer().getBoundingClientRect();
-        return { x: r.left + 200, y: r.top + r.height - 200 }; }""")
-    await page.mouse.click(spot['x'], spot['y'])
-    try:  # the pin snaps onto the road once its map is ready
-        await page.get_by_text('Map ready').wait_for(timeout=60000)
-    except Exception:
-        pass
-    await settle(page, 800)
-    pin = await state(page, 's.pendingMarker')
-    start_pins = lambda: page.locator('.leaflet-marker-icon[title="Start (drag to move)"]').count()
-    await open_favorites(page)
-    title = await page.locator('.fav-page .gen-panel__name').inner_text()
-    res.check(f'{area}: the plan\'s Favorites button opens the Favorites page',
-              'Favorites' in title and await page.locator('.plan-card').count() == 0, title)
-    res.check(f'{area}: ...which hides the start pin', pin is not None and await start_pins() == 0)
-    await page.mouse.click(spot['x'] + 60, spot['y'] - 40)
-    await settle(page, 300)
-    res.check(f'{area}: ...and a click away from favorites does not move it',
-              await state(page, 's.pendingMarker') == pin)
-    panel_top = await page.locator('.fav-page .gen-panel__header').bounding_box()
-    await page.mouse.move(panel_top['x'] + 40, panel_top['y'] + 10)  # the pointer off the map and the list: no focus
-    if await state(page, 's.favoriteSelected'):  # that click picked a favorite near it: Esc, none selected
-        # (the map has the keyboard, and pin menus were opened earlier: Leaflet's own Esc for popups
-        # used to swallow every Esc on the map after that)
+        st = await page.evaluate("""() => { const s = window.__loopState, fav = new Set(s.favoriteKeys);
+            return { n: s.paths.length, all: s.paths.every((p) => fav.has(window.__routeKey(p))), only: s.favoritesOnly }; }""")
+        res.check(f'{area}: pins: ...a click on one opens only its favorites', st['n'] >= 1 and st['all'] and st['only'], str(st))
         await page.keyboard.press('Escape')
-        await settle(page, 300)
-        res.check(f'{area}: Esc on the map deselects, after pin menus were used',
-                  await state(page, 's.favoriteSelected') is None)
-    await settle(page, 300)
-    st = await state(page, '{ tab: s.planTab, shown: s.favoritesShown }')
-    cards = await page.locator('.fav-page .route-card').count()
-    faint = sum(g['lines'] for g in await page.evaluate('() => window.__chk.faintLines()'))
-    res.check(f'{area}: it lists every favorite', st['shown'] == total and cards == total, f"{st['shown']} of {total}, {cards} cards")
-    res.check(f'{area}: ...and draws them all on the map', faint == total, f'{faint} faint lines of {total}')
-    stars = await page.evaluate("""() => [...document.querySelectorAll('.leaflet-marker-icon.custom-marker-icon--star')]
-        .map((el) => Number(el.querySelector('.marker-badge')?.textContent || 0))""")
-    grey = await page.locator('.leaflet-marker-icon.custom-marker-icon--inactive').count()
-    res.check(f'{area}: ...with a star pin per start counting its favorites, in place of the sets\' pins',
-              len(stars) >= 1 and sum(stars) == total and grey == 0, f'{stars}, {grey} set pins')
-    fit = await page.evaluate('() => window.__chk.panelFits()')
-    res.check(f'{area}: ...the page fits', fit['fits'] and not fit['pageScroll'], str(fit))
-
-    # sort: Date favorited, newest first (the default); Best is there too
-    st = await state(page, '{ sort: s.favoritesSort, asc: s.favoritesAscending, dates: s.favoriteDates, group: s.favoritesGrouping }')
-    dates = st['dates']
-    res.check(f'{area}: sorted by Date favorited, newest first, by default',
-              st['sort'] == 'favorited' and not st['asc'] and (st['group'] != 'none' or dates == sorted(dates, reverse=True)), str(st))
-    options = await page.locator('#fav-sort option').all_inner_texts()
-    res.check(f'{area}: ...Best is among the sorts', options[:2] == ['Date favorited', 'Best'], str(options))
-
-    await page.locator('.fav-page .route-card').first.click()
-    await settle(page, 900)
-    sel = await state(page, 's.favoriteSelected')
-    stroke = await page.evaluate('() => window.__chk.activeStroke()')
-    res.check(f'{area}: clicking one selects it, bold in the favorite colour',
-              sel is not None and stroke and stroke.replace(' ', '').startswith('hsl(35,'), str(stroke))
-    res.check(f'{area}: ...with its elevation (no Reverse: it is not in an open set)',
-              await page.locator('.elevation-window').count() == 1
-              and await page.locator('.elevation-window').get_by_role('button', name='Reverse').count() == 0)
-    nav = await page.locator('.fav-page .route-nav__label').inner_text()
-    res.check(f'{area}: ..."Favorite 1 of n" above the list', nav.startswith(f'Favorite 1 of {total}'), nav)
-    await shot('favorites_page')
-    if total >= 2:
-        await page.keyboard.press('ArrowRight')
-        await settle(page, 400)
-        res.check(f'{area}: ...the arrows step to the next favorite', await state(page, 's.favoriteSelected') not in (None, sel))
-        await page.locator('.fav-page .route-nav').get_by_role('button', name='Previous favorite').click()
-        await settle(page, 400)
-        res.check(f'{area}: ...and the ‹ button back', await state(page, 's.favoriteSelected') == sel)
-    await page.locator('#fav-sort').select_option('found')
-    await settle(page, 300)
-    res.check(f'{area}: ...sorting by Best keeps the one shown', await state(page, 's.favoriteSelected') == sel
-              and await state(page, 's.favoritesSort') == 'found')
-    await page.locator('#fav-sort').select_option('favorited')
-    await settle(page, 300)
-
-    # groups: by set, by start (the sets of one start together), none (one list, each card names its set)
-    by_set = await page.locator('.fav-page .fav-group__head').count()
-    await page.locator('.fav-page__grouping button', has_text='By start').click()
-    await settle(page, 300)
-    by_start = await page.locator('.fav-page .fav-group__head').count()
-    await page.locator('.fav-page__grouping button', has_text='None').click()
-    await settle(page, 300)
-    none_heads = await page.locator('.fav-page .fav-group__head').count()
-    names = await page.locator('.fav-page .route-card__from-name').count()
-    dates = await state(page, 's.favoriteDates')
-    res.check(f'{area}: grouped by set, by start (fewer or as many groups), or none (one list, each card names its set)',
-              by_set >= 1 and 1 <= by_start <= by_set and none_heads == 0 and names == total
-              and dates == sorted(dates, reverse=True), f'{by_set} sets, {by_start} starts, {names} names')
-    await shot('favorites_none')
-    await page.locator('.fav-page__grouping button', has_text='By set').click()
-    await settle(page, 300)
-    first_group = page.locator('.fav-page .fav-group').first
-    in_first = await first_group.locator('.route-card').count()
-    await first_group.locator('.fav-group__fold').click()
-    await settle(page, 300)
-    folded = await page.locator('.fav-page .route-card').count()
-    await first_group.locator('.fav-group__fold').click()
-    await settle(page, 300)
-    res.check(f'{area}: ...a group folds and unfolds', folded == total - in_first
-              and await page.locator('.fav-page .route-card').count() == total, f'{total} -> {folded}')
-
-    # Groups in the sort's order: by Length, reversed, the group with the longest route first
-    # (groups near the view first, each part in that order); a sort chosen again runs the way it
-    # was last used.
-    await page.locator('#fav-sort').select_option('total_miles')
-    await settle(page, 200)
-    if await state(page, 's.favoritesAscending'):
-        await page.locator('.fav-page').get_by_role('button', name=re.compile('^Reverse the order')).click()
-        await settle(page, 300)
-    tops = await page.evaluate("""() => { const s = window.__loopState;
-        const miles = (id) => s.favoritePaths.find((p) => p.id === id).properties.total_miles;
-        return s.favoriteGroups.map((g) => [g.near, miles(g.top)]); }""")
-    ordered = all(a[1] >= b[1] for a, b in zip(tops, tops[1:]) if a[0] == b[0])
-    res.check(f'{area}: by Length, longest first: the groups in that order too, by their longest route',
-              ordered and len(tops) >= 1, str(tops))
-    await page.locator('#fav-sort').select_option('favorited')
-    await settle(page, 200)
-    await page.locator('#fav-sort').select_option('total_miles')
-    await settle(page, 200)
-    res.check(f'{area}: ...Length chosen again runs the way it was last used (longest first)',
-              await state(page, "s.favoritesSort === 'total_miles' && !s.favoritesAscending"))
-    await page.locator('#fav-sort').select_option('favorited')
-    await settle(page, 300)
-
-    # Focus: the map shows only the faint routes of the selected favorite's group, of a card's
-    # or a header's group under the pointer, or of a pin's start; a click on empty map or Esc
-    # shows them all again. The selected favorite's start pin is orange.
-    groups = await state(page, 's.favoriteGroups')
-    away = await page.evaluate("""() => { const r = window.__loopMap.getContainer().getBoundingClientRect();
-        return { x: r.left + 60, y: r.top + 120 }; }""")
-    await page.locator('.fav-page .route-card').first.click()
-    await settle(page, 900)
-    faint = sum(g['lines'] for g in await page.evaluate('() => window.__chk.faintLines()'))
-    st = await state(page, '{ map: s.favoritesOnMap, focus: s.favoriteFocus }')
-    orange = await page.locator('.leaflet-marker-icon.custom-marker-icon--favorite-highlight').count()
-    res.check(f'{area}: selecting a favorite shows only its group\'s faint routes, and its start pin orange',
-              st['map'] == groups[0]['n'] and faint == groups[0]['n'] and orange == 1 and (st['focus'] or '').startswith('group:'),
-              f"{st}, {faint} drawn, group of {groups[0]['n']}, {orange} orange")
-    await shot('favorites_focus')
-    if len(groups) >= 2:
-        other = page.locator('.fav-page .fav-group').nth(1).locator('.route-card').first
-        await other.scroll_into_view_if_needed()
-        await other.hover()
-        await settle(page, 500)
-        st = await state(page, '{ map: s.favoritesOnMap, hl: s.favoriteHighlight }')
-        res.check(f'{area}: ...a card of another group under the pointer: only its group\'s, and its start\'s pin orange',
-                  st['map'] == groups[1]['n'] and await page.locator('.leaflet-marker-icon.custom-marker-icon--favorite-highlight').count() == 1,
-                  f"{st}, group of {groups[1]['n']}")
-        await page.locator('.fav-page .fav-group__head').nth(1).hover()
-        await settle(page, 300)
-        res.check(f'{area}: ...a group\'s header under the pointer: only its group\'s',
-                  await state(page, 's.favoritesOnMap') == groups[1]['n'])
-        await page.mouse.move(away['x'], away['y'])
-        await settle(page, 400)
-        res.check(f'{area}: ...the pointer gone, the selected favorite\'s group again',
-                  await state(page, 's.favoritesOnMap') == groups[0]['n'])
-        # a hidden route cannot be picked: a click on one (away from the ones shown) is a click on empty map
-        spot = await page.evaluate("""([n]) => { const s = window.__loopState; const shown = new Set(
-              s.favoritePaths.slice(0, n).map((p) => p.id));
-            for (const path of s.favoritePaths.slice(n)) {
-              for (const p of window.__chk.along(path, 0.1, 0.9, 40, 0)) {
-                if (window.__chk.onMap(p.x, p.y) && s.favoritePaths.slice(0, n).every((q) => window.__chk.distPx(q, p.x, p.y) > 40)) return p;
-              } }
-            return null; }""", [groups[0]['n']])
-        if spot:
-            await page.mouse.click(spot['x'], spot['y'])
-            await settle(page, 400)
-            res.check(f'{area}: ...a click on a hidden route does not pick it: nothing is selected, every faint route is back',
-                      await state(page, 's.favoriteSelected === null && s.favoritesOnMap === s.favoritesShown'))
-        else:
-            print(f'  [SKIP] {area}: no hidden route away from the shown ones to click')
-    else:
-        print(f'  [SKIP] {area}: one group only: focus on another group not checked')
-    await page.locator('.fav-page .route-card').first.click()
-    await settle(page, 600)
-    await page.mouse.click(away['x'], away['y'])
-    await settle(page, 400)
-    res.check(f'{area}: a click on empty map: nothing selected, every faint route back',
-              await state(page, 's.favoriteSelected === null && s.favoritesOnMap === s.favoritesShown && !s.favoriteHighlight'))
-    await page.locator('.fav-page .route-card').first.click()
-    await settle(page, 600)
-    await page.mouse.move(away['x'], away['y'])
-    await page.keyboard.press('Escape')
-    await settle(page, 300)
-    res.check(f'{area}: ...and so does Esc', await state(page, 's.favoriteSelected === null && s.favoritesOnMap === s.favoritesShown'))
-    pins = page.locator('.leaflet-marker-icon.custom-marker-icon--star')
-    await pins.first.hover()
-    await settle(page, 400)
-    st = await state(page, '{ focus: s.favoriteFocus, map: s.favoritesOnMap }')
-    lit = await page.locator('.fav-page .fav-group__head.is-lit').count()
-    res.check(f'{area}: a star pin under the pointer: only its start\'s faint routes, its groups lit in the list',
-              (st['focus'] or '').startswith('start:') and st['map'] >= 1 and (lit >= 1 or await state(page, "s.favoritesGrouping === 'none'")),
-              f'{st}, {lit} lit')
-    await page.mouse.move(away['x'], away['y'])
-    await settle(page, 300)
-
-    # Grouped by start, Open opens all routes from that start (two sets or more), favorites only
-    await page.locator('.fav-page__grouping button', has_text='By start').click()
-    await settle(page, 300)
-    many = await state(page, 's.favoriteGroups.findIndex((g) => g.sets > 1)')
-    if many >= 0:
-        await page.locator('.fav-page .fav-group').nth(many).locator('.fav-group__action', has_text='Open').click()
-        try:
-            await wait_state(page, "s.mode === 'display' && !!s.combinedKey", 5000)
-        except Exception:
-            pass
-        await settle(page, 500)
-        st = await state(page, '{ mode: s.mode, all: !!s.combinedKey, only: s.favoritesOnly, fav: s.currentFavorite }')
-        res.check(f'{area}: grouped by start, Open opens all routes from there, favorites only',
-                  st['mode'] == 'display' and st['all'] and st['only'] and st['fav'], str(st))
-        await page.keyboard.press('Backspace')
-        await wait_state(page, "s.mode === 'input' && s.planTab === 'favorites'", 5000)
-        await settle(page, 400)
-    else:
-        print(f'  [SKIP] {area}: no start with two sets of favorites')
-    await page.locator('.fav-page__grouping button', has_text='By set').click()
-    await settle(page, 300)
-
-    # groups near the map's view first; In map view; moved by the app (bringing a favorite into view) nothing reorders
-    # (the map first shows every favorite, as the user would bring it)
-    await page.evaluate("""() => { const s = window.__loopState; let b = null;
-        s.favoritePaths.forEach((p) => p.geometry.coordinates.forEach(([x, y]) => {
-          b = b ? [[Math.min(b[0][0], y), Math.min(b[0][1], x)], [Math.max(b[1][0], y), Math.max(b[1][1], x)]] : [[y, x], [y, x]]; }));
-        window.__loopMap.fitBounds(b, { animate: false, paddingTopLeft: [40, 40], paddingBottomRight: [420, 40] }); }""")
-    await settle(page, 500)
-    view = await page.evaluate('() => { const m = window.__loopMap; const c = m.getCenter(); return [c.lat, c.lng, m.getZoom()]; }')
-    near = await state(page, 's.favoriteGroups.map((g) => g.near)')
-    await page.evaluate('([a, b, z]) => { window.__loopMap.setView([a + 0.6, b + 0.6], z, { animate: false }); }', view)
-    await settle(page, 500)
-    away = await state(page, 's.favoriteGroups.map((g) => g.near)')
-    res.check(f'{area}: groups near the map\'s view are marked so (and first); moved away, none is',
-              all(near) and not any(away), f'{near} -> {away}')
-    await page.locator('.fav-page__in-view').click()
-    await settle(page, 300)
-    shown = await state(page, 's.favoritesShown')
-    empty = await page.locator('.fav-page .gen-empty').inner_text() if await page.locator('.fav-page .gen-empty').count() else ''
-    await page.evaluate('([a, b, z]) => { window.__loopMap.setView([a, b], z, { animate: false }); }', view)
-    try:
-        await wait_state(page, f's.favoritesShown === {total}', 5000)
-    except Exception:
-        pass
-    back = await state(page, 's.favoritesShown')
-    res.check(f'{area}: In map view lists only the favorites in the view (none away from them, all back at them)',
-              shown == 0 and 'map' in empty and back == total, f'{shown} away ({empty!r}), {back} back')
-    await page.locator('.fav-page__in-view').click()
-    await settle(page, 300)
-    await page.evaluate('([a, b, z]) => { window.__loopMap.setView([a + 0.6, b + 0.6], z, { animate: false }); }', view)
-    await settle(page, 500)
-    await page.locator('.fav-page .route-card').first.click()  # the app brings it into view (clicked again: it is selected)
-    await settle(page, 1200)
-    moved = await page.evaluate('([a, b]) => { const c = window.__loopMap.getCenter(); return Math.abs(c.lat - a - 0.6) + Math.abs(c.lng - b - 0.6) > 0.05; }', view)
-    after = await state(page, 's.favoriteGroups.map((g) => g.near)')
-    res.check(f'{area}: ...the map brought to a favorite by the app does not reorder the groups',
-              moved and not any(after), f'moved {moved}, near {after}')
-    await page.evaluate('([a, b, z]) => { window.__loopMap.setView([a, b], z, { animate: false }); }', view)
-    await settle(page, 500)
-
-    # a star pin's menu: show its favorites
-    await page.locator('.leaflet-marker-icon.custom-marker-icon--star').first.click()
-    await page.locator('.set-menu__title').wait_for(state='visible', timeout=5000)
-    menu_title = await page.locator('.set-menu__title').inner_text()
-    await shot('favorites_pin_menu')
-    await page.locator('.set-menu__action', has_text='Show').first.click()
-    await settle(page, 500)
-    res.check(f'{area}: a star pin\'s menu shows its favorites', 'here' in menu_title.lower()
-              and await state(page, 's.favoriteSelected') is not None and await page.locator('.set-menu').count() == 0, menu_title)
-    await page.keyboard.press('Escape')
-    await settle(page, 200)
-    await page.locator('.fav-page .route-card').first.click()
-    await settle(page, 600)
-
-    # the Road tool paints roads there without a start: one on the selected favorite keeps it listed
-    try:
-        await wait_state(page, 's.roadToolReady', 20000)
-        # every tile under the favorites in view: a tile still on its way would leave the favorite's road out
-        await wait_state(page, 's.favoriteTilesMissing === 0 && s.favoriteTilesWanted > 0', 20000)
-        ready = True
-    except Exception:
-        ready = False
-    res.check(f'{area}: the Road tool works in the Favorites tab, with no start needed', ready)
-    if ready:
-        chosen = await state(page, 's.favoriteSelected')
-        p = await page.evaluate("""(id) => { const path = window.__loopState.favoritePaths.find((q) => q.id === id);
-            for (const f of [0.3, 0.4, 0.2, 0.5, 0.6]) { const pt = window.__chk.along(path, f, f, 1, 0)[0];
-              if (window.__chk.onMap(pt.x, pt.y)) return pt; } return null; }""", chosen)
-        if p:
-            await page.keyboard.press('r')
-            await page.mouse.move(p['x'], p['y'])
-            await settle(page, 200)
-            await page.mouse.click(p['x'], p['y'])
-            await settle(page, 400)
-            st = await state(page, f"{{ sel: s.selections.map((x) => x.type), shown: s.favoritesShown, "
-                                   f"kept: s.favoritePaths.some((q) => q.id === {json.dumps(chosen)}), "
-                                   f"road: s.selections.map((x) => x.label || x.name || '') }}")
-            res.check(f'{area}: ...a road painted on a favorite keeps that favorite listed',
-                      st['sel'] == ['include'] and st['kept'], str(st))
-            await page.keyboard.press('k')
-            await page.keyboard.press('Backspace')  # back to the plan
-            try:
-                await wait_state(page, "s.planTab === 'loops' && s.selections.length === 0", 5000)
-                await page.locator('.leaflet-marker-icon[title="Start (drag to move)"]').wait_for(timeout=5000)
-            except Exception:
-                pass
-            back = await state(page, '{ tab: s.planTab, sel: s.selections.length }')
-            res.check(f'{area}: ...and it only filters favorites: the plan has its own (none); Backspace went back',
-                      back == {'tab': 'loops', 'sel': 0} and await start_pins() == 1, f'{back}, {await start_pins()} start pins')
-            await open_favorites(page)
-            res.check(f'{area}: ...back in Favorites the painted road is there again',
-                      await state(page, 's.selections.length') == 1)
-            await page.keyboard.press('z')
-            await settle(page, 300)
-
-        # Road pieces load only for the favorites in or near the view: none far away from them
-        view = await page.evaluate('() => { const m = window.__loopMap; const c = m.getCenter(); return [c.lat, c.lng, m.getZoom()]; }')
-        await page.evaluate('([a, b, z]) => { window.__loopMap.setView([a + 0.6, b + 0.6], z, { animate: false }); }', view)
-        await settle(page, 500)
-        await page.keyboard.press('r')
-        await settle(page, 200)
-        st = await state(page, '{ all: s.favoriteTilesAll, wanted: s.favoriteTilesWanted, roads: s.favoriteRoads }')
-        hint = await page.locator('.map-view__hint').inner_text()
-        res.check(f'{area}: road pieces load only for favorites in or near the view (none far from them)',
-                  st['all'] > 0 and st['wanted'] == 0 and st['roads'] == 'none' and 'No favorite in view' in hint,
-                  f'{st}, hint {hint!r}')
-        await page.evaluate('([a, b, z]) => { window.__loopMap.setView([a, b], z, { animate: false }); }', view)
-        try:
-            await wait_state(page, "s.favoriteRoads === 'ready' && s.favoriteTilesWanted > 0 && s.roadToolReady", 20000)
-            back = True
-        except Exception:
-            back = False
-        res.check(f'{area}: ...back at the favorites, their roads are there for the Road tool', back,
-                  str(await state(page, '{ wanted: s.favoriteTilesWanted, roads: s.favoriteRoads }')))
-        await page.keyboard.press('k')
-        await settle(page, 200)
-
-    # a green area away from every favorite: none goes through it
-    box = await page.evaluate("""() => { const r = window.__loopMap.getContainer().getBoundingClientRect();
-        return { x: r.left + 120, y: r.top + 140 }; }""")
-    await page.keyboard.press('c')
-    await page.mouse.move(box['x'], box['y'])
-    await page.mouse.down()
-    await page.mouse.move(box['x'] + 30, box['y'], steps=5)
-    await page.mouse.up()
-    await settle(page, 400)
-    shown = await state(page, 's.favoritesShown')
-    empty = await page.locator('.fav-page .gen-empty').count()
-    res.check(f'{area}: painted roads and areas filter the favorites', shown < total and (shown > 0 or empty == 1),
-              f'{shown} of {total} go through the area')
-    await page.keyboard.press('z')
-    await settle(page, 400)
-    res.check(f'{area}: ...and without them every favorite is back', await state(page, 's.favoritesShown') == total)
-
-    # a group opens its generation, showing only its favorites
-    await page.locator('.fav-group__action', has_text='Open').first.click()
-    await settle(page, 700)
-    st = await state(page, '{ mode: s.mode, only: s.favoritesOnly, fav: s.currentFavorite }')
-    res.check(f'{area}: a group opens its generation in favorites only', st['mode'] == 'display' and st['only'] and st['fav'], str(st))
-    await page.keyboard.press('Backspace')
-    await settle(page, 400)
-    res.check(f'{area}: ...and back from it, the Favorites page is still open', await state(page, "s.mode === 'input' && s.planTab === 'favorites'"))
-
-    # While the Road tool's road pieces are on their way it says "Loading roads…" (the server's
-    # answers held back here: the page is reloaded through a relay that keeps them until released).
-    hold = {'on': True, 'held': [], 'ws': None}
-
-    async def relay(ws):
-        hold['ws'] = ws
-        server = ws.connect_to_server()
-
-        def from_server(message):
-            if hold['on'] and isinstance(message, str) and message.startswith('{"type": "ROAD_SEGMENTS"'):
-                hold['held'].append(message)
-                return
-            ws.send(message)
-        server.on_message(from_server)
-    await page.route_web_socket(re.compile('.*'), relay)
+        await wait_state(page, "s.mode === 'input'", 5000)
     await page.reload()
-    await wait_state(page, 's.favoriteCount > 0', 30000)
+    await page.wait_for_function('() => !!window.__loopMap && !!window.__loopState')
     await helpers(page)
-    if await state(page, 's.planTab') != 'favorites':
-        await open_favorites(page)
-    try:
-        await wait_state(page, "s.favoriteRoads === 'loading'", 20000)
-        await page.keyboard.press('r')
-        await settle(page, 300)
-        loading = await page.locator('.map-view__hint').inner_text()
-    except Exception:
-        loading = f"(roads: {await state(page, 's.favoriteRoads')})"
-    hold['on'] = False
-    for message in hold['held']:
-        hold['ws'].send(message)
-    try:
-        await wait_state(page, "s.favoriteRoads === 'ready' && s.roadToolReady", 20000)
-        await settle(page, 300)
-        ready = await page.locator('.map-view__hint').inner_text()
-    except Exception:
-        ready = f"(roads: {await state(page, 's.favoriteRoads')})"
-    res.check(f'{area}: while the roads load the Road tool says "Loading roads…", then how to paint them',
-              'Loading roads' in loading and 'Click a road' in ready, f'{loading!r} -> {ready!r}')
-    await page.keyboard.press('k')
-    await page.locator('.fav-page').get_by_role('button', name='Back').click()
+    res.check(f'{area}: pins: ...and the switch is remembered after a reload', await state(page, 's.favoritesOnly'))
+    await page.locator('.panel-section .fav-toggle').click()
     await settle(page, 300)
 
 
@@ -1162,8 +874,6 @@ async def boundary_checks(page, area, res, shot):
         first = await state(page, '{ id: s.activePathSetId, name: s.generations.find((g) => g.id === s.activePathSetId).name }')
         await page.keyboard.press('Backspace')
         await settle(page, 400)
-    if await state(page, 's.planTab') != 'loops':
-        await page.locator('.fav-page').get_by_role('button', name='Back').click()
     if first is None:  # the first generation of the area (made without a boundary)
         first = await state(page, '(() => { const g = s.generations[s.generations.length - 1]; return g ? { id: g.id, name: g.name } : null; })()')
     cfg = AREAS[area]
@@ -1390,15 +1100,22 @@ async def sets_checks(page, area, res, shot, received):
               f'and New set back into Find loops',
               picked and kept and await shows('Find loops'), f'picked {picked}, kept {kept}, snapped before the pick {snapped_before}')
 
-    # The grey pin of one set: a click opens its menu (open it, or New set from here), not the set.
+    # The grey pin of one set: a click opens the set; a right-click its menu (open it, or New set from here).
     await page.mouse.click(tip['x'] - 160, tip['y'] + 40)  # the start pin elsewhere, off the grey pin
     await settle(page, 400)
-    single = page.locator(f'.leaflet-marker-icon[title^={json.dumps(first["name"] + " (")}]')
+    single = page.locator(f'.leaflet-marker-icon[aria-label^={json.dumps(first["name"] + " · ")}]')
     await single.click()
+    await wait_state(page, f"s.mode === 'display' && s.activePathSetId === {json.dumps(first['id'])} && !s.combinedKey", 5000)
+    res.check(f'{area}: clicking a pin with one set opens that set', True)
+    await page.keyboard.press('Backspace')
+    await wait_state(page, "s.mode === 'input'", 5000)
+    await page.mouse.click(tip['x'] - 160, tip['y'] + 40)  # the start pin again (the plan came back without one)
+    await settle(page, 400)
+    await single.click(button='right')
     await page.locator('.set-menu__name').first.wait_for(state='visible', timeout=5000)
     await settle(page, 200)
     items = await page.locator('.set-menu__name').all_inner_texts()
-    res.check(f'{area}: clicking a pin with one set opens its menu (not the set)',
+    res.check(f'{area}: right-clicking a pin with one set opens its menu (not the set)',
               items == [first['name']] and await state(page, "s.mode") == 'input'
               and await page.locator('.set-menu__action', has_text='New set from here').is_visible(), str(items))
     res.check(f'{area}: ...with no Show all routes from here (one set)',
@@ -1420,8 +1137,8 @@ async def sets_checks(page, area, res, shot, received):
     await wait_state(page, f"s.mode === 'display' && s.activePathSetId && s.activePathSetId !== {json.dumps(first['id'])}", 30000)
     await wait_state(page, '!s.isGenerating && s.totalCount >= 1', 120000)
     second = await state(page, '{ id: s.activePathSetId, name: s.generations.find((g) => g.id === s.activePathSetId).name }')
-    res.check(f'{area}: a second generation from the same start is "<place> 2"',
-              second['name'] == f"{first['name']} 2", second['name'])
+    res.check(f'{area}: a second generation from the same start is "<place> #2"',
+              second['name'] == f"{first['name']} #2", second['name'])
     await settle(page, 500)
     shown = await page.evaluate('() => window.__chk.favoritesShown()')
     res.check(f'{area}: routes favorited in the first are favorites in the second (found again there)',
@@ -1429,15 +1146,15 @@ async def sets_checks(page, area, res, shot, received):
     await page.keyboard.press('Backspace')  # back to the plan
     await settle(page, 500)
     pins = await page.evaluate("""() => [...document.querySelectorAll('.leaflet-marker-icon.custom-marker-icon')]
-        .map((el) => el.getAttribute('title') || '').filter((t) => t.includes('sets start here'))""")
+        .map((el) => el.getAttribute('aria-label') || '').filter((t) => /^\d+ sets · /.test(t))""")
     res.check(f'{area}: both share one pin', len(pins) == 1, pins[0][:60] if pins else 'none')
     if pins:
-        shared = page.locator('.leaflet-marker-icon[title*="sets start here"]')
-        await shared.click()
+        shared = page.locator('.leaflet-marker-icon[aria-label*=" sets · "]')
+        await shared.click(button='right')
         await page.locator('.set-menu__name').first.wait_for(state='visible', timeout=5000)
         await settle(page, 200)
         items = await page.locator('.set-menu__name').all_inner_texts()
-        res.check(f'{area}: clicking it lists both, newest first', items == [second['name'], first['name']], str(items))
+        res.check(f'{area}: right-clicking it lists both, newest first', items == [second['name'], first['name']], str(items))
         await shot('set_menu')
         # A long list scrolls in its own box, and the wheel there scrolls it instead of zooming the map
         # (squeezed to one set's height here, as if there were many).
@@ -1455,7 +1172,7 @@ async def sets_checks(page, area, res, shot, received):
 
         # The menu closes at a click anywhere else; on the map that click does nothing more.
         async def open_menu():
-            await shared.click()
+            await shared.click(button='right')
             await page.locator('.set-menu__name').first.wait_for(state='visible', timeout=5000)
             await settle(page, 200)
         async def menu_closed():
@@ -1465,13 +1182,13 @@ async def sets_checks(page, area, res, shot, received):
             except Exception:
                 return False
         pin_box = await shared.bounding_box()
-        before = await state(page, '{ pin: s.pendingMarker, mode: s.mode, tab: s.planTab }')
+        before = await state(page, '{ pin: s.pendingMarker, mode: s.mode }')
         spot = {'x': pin_box['x'] - 220, 'y': pin_box['y'] + 160}
         on_map = await page.evaluate('([x, y]) => window.__chk.onMap(x, y)', [spot['x'], spot['y']])
         await page.mouse.click(spot['x'], spot['y'])
         closed = await menu_closed()
         await settle(page, 300)
-        after = await state(page, '{ pin: s.pendingMarker, mode: s.mode, tab: s.planTab }')
+        after = await state(page, '{ pin: s.pendingMarker, mode: s.mode }')
         res.check(f'{area}: a click on the map closes the menu, and does not place the start pin',
                   on_map and closed and after == before, f'closed {closed}, {before} -> {after}')
         await page.mouse.click(spot['x'], spot['y'])  # the next click does
@@ -1482,11 +1199,12 @@ async def sets_checks(page, area, res, shot, received):
         await page.locator('.panel-title').click()
         res.check(f'{area}: a click on the panel closes the menu', await menu_closed())
         await open_menu()
-        await page.locator('.fav-open-btn').click()
+        only = await state(page, 's.favoritesOnly')
+        await page.locator('.panel-section .fav-toggle').click()
         closed = await menu_closed()
         res.check(f'{area}: a button in the panel closes the menu and does what it does',
-                  closed and await state(page, 's.planTab') == 'favorites', f'closed {closed}')
-        await page.locator('.fav-page').get_by_role('button', name='Back').click()
+                  closed and await state(page, 's.favoritesOnly') != only, f'closed {closed}')
+        await page.locator('.panel-section .fav-toggle').click()
         await settle(page, 300)
         await open_menu()
         zoom = await page.evaluate('() => window.__loopMap.getZoom()')
@@ -1502,11 +1220,21 @@ async def sets_checks(page, area, res, shot, received):
         res.check(f'{area}: Esc closes the menu', await menu_closed())
         await open_menu()
         await shared.click()
-        res.check(f'{area}: clicking its pin again closes it', await menu_closed())
+        closed = await menu_closed()
+        await wait_state(page, "s.mode === 'display' && !!s.combinedKey", 5000)
+        res.check(f'{area}: a click on its pin closes the menu and opens the pin\'s routes', closed)
+        await page.keyboard.press('Backspace')
+        await wait_state(page, "s.mode === 'input'", 5000)
+        await settle(page, 300)
         await open_menu()
         await page.locator('.set-menu__item', has_text=second['name']).click()
         await wait_state(page, f"s.mode === 'display' && s.activePathSetId === {json.dumps(second['id'])}", 5000)
-        res.check(f'{area}: ...and picking one opens it', True)
+        await settle(page, 300)
+        title = await page.locator('.gen-panel__name').inner_text()
+        chosen = await page.locator('.set-chip.is-on').inner_text()
+        res.check(f'{area}: ...and picking one opens all routes from there with its chip chosen, its name above',
+                  await state(page, '!!s.combinedKey') and title.strip() == second['name'] and second['name'] in chosen,
+                  f'{title!r}, chip {chosen!r}')
         # With a set open, a click on another route only closes the menu (the next one shows that route).
         # (The spot is picked with the menu open, away from it and from the pin.)
         await settle(page, 500)
@@ -1598,19 +1326,21 @@ async def sets_checks(page, area, res, shot, received):
         if await page.locator('.gen-more__options').count():
             await page.locator('.gen-more__settings').click()
 
-        # A card's set name opens that set by itself, on the same route
+        # A card's set name chooses that set's chip (only its routes, its name above), on the same route
         card_set = await page.locator('.route-card.is-selected .route-card__from-name').inner_text()
         shown_key = await page.evaluate('() => window.__routeKey(window.__loopState.currentPath)')
         await page.locator('.route-card.is-selected .route-card__from').click()
-        await wait_state(page, "s.mode === 'display' && !s.combinedKey", 5000)
-        await settle(page, 300)
-        st = await page.evaluate('() => ({ open: window.__loopState.activePathSetId, key: window.__routeKey(window.__loopState.currentPath) })')
+        await settle(page, 400)
+        st = await page.evaluate('() => ({ open: window.__loopState.activePathSetId, all: !!window.__loopState.combinedKey, '
+                                 'key: window.__routeKey(window.__loopState.currentPath) })')
+        title = await page.locator('.gen-panel__name').inner_text()
         owner = first['id'] if card_set == first['name'] else second['id']
-        res.check(f'{area}: ...a card\'s set name opens that set by itself, on the same route',
-                  st['open'] == owner and st['key'] == shown_key, f'{card_set}: {st}')
+        res.check(f'{area}: ...a card\'s set name chooses that set\'s chip, its name above, on the same route',
+                  st['all'] and st['open'] == owner and st['key'] == shown_key and title.strip() == card_set.strip(),
+                  f'{card_set}: {st}, {title!r}')
         # From an open set, the pin's New set from here goes back to the plan at that start.
         await settle(page, 300)
-        await shared.click()
+        await shared.click(button='right')
         await page.locator('.set-menu__action', has_text='New set from here').click()
         await wait_state(page, "s.mode === 'input' && !!s.pendingMarker", 5000)
         await settle(page, 300)
@@ -1622,7 +1352,8 @@ async def sets_checks(page, area, res, shot, received):
         await page.get_by_text('Map ready').wait_for(timeout=90000)
         await settle(page, 800)
 
-    # Your loops: hovering a row highlights its pin; clicking it opens it and centres the map on it
+    # Your loops: hovering a row shows only its pin and previews its routes;
+    # clicking it opens it and centres the map on it
     pos = await state(page, f"s.generations.find((g) => g.id === {json.dumps(first['id'])}).markerPosition")
     await page.evaluate('([a, b]) => { window.__loopMap.setView([a + 0.03, b - 0.05], window.__loopMap.getZoom(), { animate: false }); }',
                         [pos['lat'], pos['lng']])
@@ -1631,13 +1362,16 @@ async def sets_checks(page, area, res, shot, received):
     row = page.locator('.gen-list__row', has_text=first['name']).filter(has_not_text=second['name'])
     await row.hover()
     await settle(page, 800)
-    lit = await page.locator('.custom-marker-icon--highlight').count()
+    shown_pins = len(await set_pins(page))
+    drawn = await faint_count(page)
+    n_first = await state(page, f"s.generations.find((g) => g.id === {json.dumps(first['id'])}).pathCount")
     still = await page.evaluate('() => { const c = window.__loopMap.getCenter(); return [c.lat, c.lng]; }')
-    res.check(f'{area}: hovering a row in Your loops highlights its pin', lit == 1, f'{lit} highlighted')
+    res.check(f'{area}: hovering a row in Your loops shows only its pin and previews its routes',
+              shown_pins == 1 and drawn == n_first, f'{shown_pins} pins, {drawn} of {n_first} routes')
     res.check(f'{area}: ...without moving the map', still == view)
     await page.mouse.move(10, 10)
     await settle(page, 300)
-    res.check(f'{area}: ...leaving the list ends the highlight', await page.locator('.custom-marker-icon--highlight').count() == 0)
+    res.check(f'{area}: ...leaving the list ends it', len(await set_pins(page)) > 1 and await faint_count(page) == 0)
 
     # rename from the list
     await row.hover()
@@ -2342,9 +2076,9 @@ async def run_area(page, area, res, only, sent, received):
     if want('sets'):
         await sets_checks(page, area, res, shot, received)
 
-    # ---- every favorite, in the plan's Favorites tab
-    if want('all_favorites'):
-        await all_favorites_checks(page, area, res, shot)
+    # ---- the start pins while planning: hover, click, chips, the Favorites switch
+    if want('pins'):
+        await pins_checks(page, area, res, shot)
 
     # ---- a custom search boundary
     if want('boundary'):
@@ -2384,7 +2118,7 @@ async def list_browsers(async_playwright, explicit):
 async def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--area', choices=['rural', 'city', 'both'], default='both')
-    ap.add_argument('--only', default='', help='comma-separated sections: offline_map, sidebar, hover, click, road_tool, areas, favorites, dead_end, sets, all_favorites, boundary')
+    ap.add_argument('--only', default='', help='comma-separated sections: offline_map, sidebar, hover, click, road_tool, areas, favorites, dead_end, sets, pins, boundary')
     ap.add_argument('--headed', action='store_true', help='show the browser')
     ap.add_argument('--browser', default=os.environ.get('CHECK_BROWSER'), help='path to a Chrome / Chromium binary')
     ap.add_argument('--list-browsers', action='store_true', help='show the browsers the check can find, and whether they start')

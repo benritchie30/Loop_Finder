@@ -13,10 +13,7 @@ const DOUBLE_CLICK_MS = 250;
  *   several run together steps through them (quick clicks too). Ctrl-click
  *   (Cmd-click on a Mac) steps back through them, the reverse of clicking.
  *   Nothing is filtered or sent. (Shift stays Leaflet's: Shift-drag zooms to a box.)
- * - Plan view: a click moves the start pin. On the Favorites page a click near
- *   the favorites on the map (`paths`: those in focus) shows one there (and
- *   steps like routes); a click elsewhere, or on a hidden one, is
- *   onClickAway (nothing selected).
+ * - Plan view: a click moves the start pin.
  * - Double-click a painted road, an area's outline, or an old pin: remove it
  *   (a Ctrl-click road goes as a whole). Double-click never zooms.
  * Only clicks pressed in pan mode count: releasing a drawn area switches back
@@ -30,12 +27,11 @@ function PanInteractions({
     selections,
     onSelectPath,
     onMoveStart,
-    onClickAway = null,
     onRemoveSelection,
 }) {
     const map = useMap();
     const state = useRef({});
-    state.current = { mode, paths, currentPathId, selections, onSelectPath, onMoveStart, onClickAway, onRemoveSelection };
+    state.current = { mode, paths, currentPathId, selections, onSelectPath, onMoveStart, onRemoveSelection };
 
     // No double-click zoom: quick clicks on routes would zoom the map.
     useEffect(() => {
@@ -59,16 +55,7 @@ function PanInteractions({
                 const route = routeForClick(s.paths, s.currentPathId, latlng.lat, latlng.lng, maxM, step);
                 if (route && route.id !== s.currentPathId) s.onSelectPath?.(route.id);
             } else if (s.mode === 'input') {
-                // The plan's Favorites tab: a click near favorites shows one; elsewhere it moves the start.
-                if (s.paths?.length) {
-                    const route = routeForClick(s.paths, s.currentPathId, latlng.lat, latlng.lng, tolerance(latlng.lat), step);
-                    if (route) {
-                        if (route.id !== s.currentPathId) s.onSelectPath?.(route.id);
-                        return;
-                    }
-                }
-                if (s.onMoveStart) s.onMoveStart({ lat: latlng.lat, lng: latlng.lng });
-                else s.onClickAway?.();
+                s.onMoveStart?.({ lat: latlng.lat, lng: latlng.lng });
             }
         };
 

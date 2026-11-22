@@ -8,8 +8,10 @@ favorite and refine those loops.
 - **Live results**: routes arrive one by one over a WebSocket while the search runs.
 - **Sort and filter**: length, climb rate, total climb, difficulty, loop share, % unpaved,
   discomfort (road stress), similarity; an elevation chart and sparkline for every route.
-- **Every route from one start**: a pin where several searches started lists them, and shows all
-  their routes as one list (a route found twice, once), each named by its search.
+- **Every route from one start**: rest the pointer on a pin to preview its routes; click it to open
+  them (several searches from one start as one list, a route found twice once, with a chip per
+  search to narrow it, Ctrl-click for several; opening one search shows its start with its chip
+  chosen); right-click for its menu.
 - **Steer the search**: paint roads or draw areas (circle, box, freeform) the routes must go
   through or avoid, then ask for **More routes**. New routes never repeat earlier ones.
 - **Surface preference**: Paved only, Allow gravel or Prefer gravel, for a search and for more routes.
@@ -19,9 +21,11 @@ favorite and refine those loops.
 - **GPX export**: download any route to import into Ride with GPS, Strava, Komoot, Garmin or
   Wahoo, with elevation, the way you chose to ride it.
 - **Custom search boundaries**: draw the region routes must stay inside.
-- **Favorites page**: every favorite route on one page and on the map, sorted (date favorited,
-  best, length, climb...), grouped by search, by start or not at all, filtered (measures, painted
-  roads, only those in the map's view), stepped through with the arrows.
+- **Favorites**: star routes you like (S); the Favorites switch (V) shows only the starts with
+  favorites and only their favorite routes. Deleting a search keeps its favorites, in "Favorites
+  from deleted sets" at the same start, with its pin on the map.
+- **Your loops by start**: searches grouped by where they start, foldable, the ones on the map
+  first.
 - **Favorites and history**: every generation and favorite is saved in your browser
   (IndexedDB). No accounts; the server keeps nothing about you.
 

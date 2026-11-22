@@ -9,7 +9,7 @@ const GROUPS = [
         rows: [
             ['Search for a place', ['/']],
             ['Find loops from the start', ['Enter']],
-            ['Stop finding / cancel', ['Esc']],
+            ['Stop finding / back out / remove the start pin', ['Esc']],
         ],
     },
     {
@@ -18,6 +18,7 @@ const GROUPS = [
             ['Next route', ['→', '↓']],
             ['Previous route', ['←', '↑']],
             ['Favorite the route', ['S']],
+            ['Favorites only on / off', ['V']],
             ['More routes', ['M']],
             ['Show or hide elevation', ['E']],
             ['Back to your loops', ['Backspace']],

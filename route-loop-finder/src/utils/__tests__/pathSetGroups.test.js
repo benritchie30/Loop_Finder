@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { chosenSet, groupByStart, lengthRange, newestFirst, sameStart, setsAtStart, SAME_START_M } from '../pathSetGroups';
+import { startGroups } from '../pathSetGroups';
 
 const M_LAT = 1 / 111320;
 const A = { lat: 35.2, lng: -80.8 };
@@ -68,5 +69,41 @@ describe('the pin menu and the plan\'s start choice', () => {
         expect(chosenSet(here, { pin: north(A, 5), id: 'old' }, pin)).toBe(null);
         expect(chosenSet(here, { pin, id: 'deleted' }, pin)).toBe(null);
         expect(chosenSet(here, { pin, id: 'old' }, null)).toBe(null);
+    });
+});
+
+describe('Your loops by start (startGroups)', () => {
+    const at = (lat, lng) => ({ lat, lng });
+    const box = (lat, lng) => ({ south: lat - 0.05, west: lng - 0.05, north: lat + 0.05, east: lng + 0.05 });
+    const gens = [
+        { id: 'a', name: 'Dilworth, Charlotte', markerPosition: at(35.2, -80.85), createdAt: 1, bounds: box(35.2, -80.85) },
+        { id: 'b', name: 'Dilworth, Charlotte 2', markerPosition: at(35.2, -80.85), createdAt: 5, bounds: box(35.2, -80.85) },
+        { id: 'c', name: 'Boone', markerPosition: at(36.2, -81.7), createdAt: 3, bounds: box(36.2, -81.7) },
+        { id: 'kept:deleted', name: 'Favorites from deleted sets', markerPosition: null, createdAt: 9, kept: true },
+    ];
+
+    it('one group per start, named after its first set, sets newest first, the kept set last', () => {
+        const groups = startGroups(gens);
+        expect(groups.map((g) => g.name)).toEqual(['Dilworth, Charlotte', 'Boone', 'Favorites from deleted sets']);
+        expect(groups[0].sets.map((s) => s.id)).toEqual(['b', 'a']);
+        expect(groups[0].key).toBe('a');
+        expect(groups[2].kept).toBe(true);
+    });
+
+    it('a start\'s kept set is listed after its sets, the group still named after its oldest set', () => {
+        const withKept = [...gens, {
+            id: 'kept:at:a', name: 'Favorites from deleted sets', markerPosition: at(35.2, -80.85), createdAt: 0, kept: true,
+        }];
+        const groups = startGroups(withKept);
+        expect(groups[0].name).toBe('Dilworth, Charlotte');
+        expect(groups[0].key).toBe('a');
+        expect(groups[0].sets.map((s) => s.id)).toEqual(['b', 'a', 'kept:at:a']);
+    });
+
+    it('the starts with a route in the view come first', () => {
+        const groups = startGroups(gens, box(36.2, -81.7));
+        expect(groups.map((g) => [g.name, g.near])).toEqual([
+            ['Boone', true], ['Dilworth, Charlotte', false], ['Favorites from deleted sets', false],
+        ]);
     });
 });

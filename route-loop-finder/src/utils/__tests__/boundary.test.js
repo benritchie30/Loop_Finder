@@ -67,17 +67,16 @@ describe('custom boundaries', () => {
 
 describe('the automatic search area on the map', () => {
     const marker = { lat: 35.2, lng: -80.8 };
-    const plan = { marker, miles: 20, boundary: null, editing: false, favoritesTab: false };
+    const plan = { marker, miles: 20, boundary: null, editing: false };
     const gen = { start: marker, miles: 30, boundary: null, show: true };
 
     it('the plan draws max / 2 around the pin', () => {
         expect(automaticArea('input', plan, gen)).toEqual({ lat: 35.2, lng: -80.8, miles: 20 });
     });
 
-    it('a custom boundary, the editor, the Favorites tab and no pin draw nothing', () => {
+    it('a custom boundary, the editor and no pin draw nothing', () => {
         expect(automaticArea('input', { ...plan, boundary: { shapes: [box] } }, gen)).toBeNull();
         expect(automaticArea('input', { ...plan, editing: true }, gen)).toBeNull();
-        expect(automaticArea('input', { ...plan, favoritesTab: true }, gen)).toBeNull();
         expect(automaticArea('input', { ...plan, marker: null }, gen)).toBeNull();
         expect(automaticArea('input', { ...plan, miles: 0 }, gen)).toBeNull();
     });

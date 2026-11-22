@@ -7,12 +7,12 @@ import { unpavedShare } from '../../utils/surface';
 import { COMPARE_HUES, GROUP_BADGE } from '../../utils/compareSets';
 
 /**
- * All routes from here: the set the route is from, small; a click opens that
- * set by itself (on this route). "+1" when another set found it too (named
+ * All routes from here: the set the route is from, small; a click chooses that
+ * set's chip (only its routes, on this route). "+1" when another set found it too (named
  * in the tooltip).
  */
 function FromSet({ name, also, alsoCount = 0, onOpen }) {
-    const title = `Open “${name}” by itself${also ? ` (also found by ${also})` : ''}`;
+    const title = `Only the routes of “${name}”${also ? ` (also found by ${also})` : ''}`;
     return (
         <button
             type="button"
@@ -87,7 +87,7 @@ const RouteCard = memo(forwardRef(function RouteCard({
     fromName = null, // all routes from here: the set it is from
     fromAlso = null, // ...and the other sets that found it (names, for the tooltip)
     fromAlsoCount = 0, // ...how many
-    onOpenSet, // (route): open its set by itself
+    onOpenSet, // (route): choose its set's chip
 }, ref) {
     const units = useUnits();
     const p = path.properties || {};

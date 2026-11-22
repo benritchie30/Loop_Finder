@@ -10,7 +10,6 @@ import DrawingHandler from './DrawingHandler';
 import SelectionLayer from './SelectionLayer';
 import PathMarker from './PathMarker';
 import SetPins from './SetPins';
-import FavoritePins from './FavoritePins';
 import MenuDismiss from './MenuDismiss';
 import MapFocus from './MapFocus';
 import { BoundaryEditLayer, BoundaryOutline, ReachOutline } from './BoundaryLayers';
@@ -38,22 +37,14 @@ function MapRef({ mapRef }) {
     return null;
 }
 
-/**
- * Reports the map's view ({ south, west, north, east, zoom, byApp }) when it
- * stops moving, and at once when it starts to (the Favorites page loads road
- * pieces for the favorites in or near it, and orders its groups by it).
- * byApp: the app moved it (MapFocus), not the user.
- */
+/** Reports the map's view ({ south, west, north, east }) when it stops moving (and at once). */
 function ViewReporter({ onChange }) {
     const map = useMap();
     useEffect(() => {
         if (!onChange) return undefined;
         const report = () => {
             const b = map.getBounds();
-            onChange({
-                south: b.getSouth(), west: b.getWest(), north: b.getNorth(), east: b.getEast(),
-                zoom: map.getZoom(), byApp: !!map._loopAppMove,
-            });
+            onChange({ south: b.getSouth(), west: b.getWest(), north: b.getNorth(), east: b.getEast() });
         };
         report();
         map.on('moveend', report);
@@ -63,9 +54,8 @@ function ViewReporter({ onChange }) {
 }
 
 /**
- * Where the arrow keys step through routes (the route view, the plan's
- * Favorites tab), the map leaves them to the app, even after a click gave
- * the map the keyboard focus: Leaflet would pan with them and stop the key
+ * Where the arrow keys step through routes (the route view), the map leaves
+ * them to the app, even after a click gave the map the keyboard focus: Leaflet would pan with them and stop the key
  * there. + / - still zoom. Elsewhere the arrows pan the map as usual.
  */
 function ArrowKeys({ stepRoutes }) {
@@ -125,8 +115,6 @@ function MapView({
     reachArea = null, // the automatic search area to outline: { lat, lng, miles } (max / 2 around the start)
     notice: externalNotice = null, // { text, id } from App (snaps, batch notes)
     roadIndex = null, // utils/graphRoads index of the roads of the pin's / generation's area
-    roadsState = null, // Favorites tab: 'zoom' | 'none' | 'loading' | 'ready' (the Road tool's road pieces)
-    onViewChange, // Favorites tab: ({ south, west, north, east, zoom }) when the map stops
     onNeedGraphEdges, // ask App to fetch them (once per area)
     showGraphRoads = true, // faint roads over tiles (offline they are always drawn)
     showSelections = true, // painted roads and areas in pan mode (a tool always shows them)
@@ -139,12 +127,18 @@ function MapView({
     mapCoverage = null, // { deg, tiles: [[row, col], ...] } downloaded map tiles (MAP_INFO)
     tileRoads = {}, // "row_col" -> roads of that tile, for the offline basemap
     onNeedTileRoads, // (tiles) ask the server for their roads
-    hoveredSetId = null, // generation under the pointer in "Your loops": its pin is highlighted, the map centres on it
+    hoveredSetId = null, // generation under the pointer in "Your loops": previewed like its pin under the pointer
+    favoritesOnly = false, // only the starts with favorites have pins (with their favorite counts)
+    pinPreviewKey = null, // the pin under the pointer (SetPins): the other pins are hidden
+    onPinPreview, // SetPins: ({ key, ids } | null, fromKey)
+    previewPaths = null, // the routes of the pin (or set) under the pointer, drawn faint while planning
+    isFavoriteKey = null, // (route key) => is it a favorite (a pin counts its start's favorites)
+    onViewChange, // ({ south, west, north, east }) when the map stops (Your loops: the starts in view first)
+    strongPreview = false, // a set chip under the pointer: its routes' faint lines drawn strong
+    previewSetIds = null, // the sets previewed while planning (the lit pin counts theirs)
     addingToName = null, // Find loops adds to this generation (it starts where the pin is)
     centreOn = null, // { lat, lng, n }: centre the map there (beside the panel)
     showBounds = null, // { bounds, n }: bring a route into view
-    favoritesView = null, // the Favorites page: { paths, current, hoveredId, onSelect } (every favorite listed, on the map)
-    favoritePins = null, // the Favorites page's pins: FavoritePins' props (instead of the generations' pins)
     boundaryShapes = null, // a custom search boundary to outline (grey, dotted)
     boundaryEdit = null, // the boundary being edited: { shapes, tool, add, change, draftingRef } (drawn with handles)
     isFavorite = null, // (route) => is it a favorite (drawn in the favorite colour)
@@ -252,7 +246,7 @@ function MapView({
     // Offline: a start whose search area reaches past the downloaded tiles
     // would wait for downloads that cannot happen.
     const missingTiles = useMemo(() => {
-        if (!offline || mode !== 'input' || favoritesView || !pendingMarker || !(reachMiles > 0) || !mapCoverage?.tiles) return 0;
+        if (!offline || mode !== 'input' || !pendingMarker || !(reachMiles > 0) || !mapCoverage?.tiles) return 0;
         const have = new Set(mapCoverage.tiles.map(([r, c]) => tileKey(r, c)));
         // With a boundary, only the tiles it overlaps are needed.
         const b = boundaryBounds({ shapes: boundaryShapes });
@@ -264,7 +258,7 @@ function MapView({
         return tilesForStart(pendingMarker.lat, pendingMarker.lng, reachMiles, mapCoverage.deg)
             .filter(needed)
             .filter(([r, c]) => !have.has(tileKey(r, c))).length;
-    }, [offline, mode, favoritesView, pendingMarker, reachMiles, mapCoverage, boundaryShapes]);
+    }, [offline, mode, pendingMarker, reachMiles, mapCoverage, boundaryShapes]);
 
     // What the active tool does, at the top of the map (the panel stays short).
     const getHintText = () => {
@@ -274,13 +268,6 @@ function MapView({
                 + 'Without internet, drop the pin further inside the light area or shorten the route.';
         }
         const avoid = isExcludeMode;
-        if (activeTool === 'road' && favoritesView && roadsState && roadsState !== 'ready') {
-            return {
-                zoom: 'Zoom in to paint roads (roads load for the favorites in view)',
-                none: 'No favorite in view: roads load under the favorites on the map',
-                loading: 'Loading roads…',
-            }[roadsState];
-        }
         if (activeTool === 'road') {
             return avoid
                 ? 'Click a road to avoid it (red) · Ctrl-click: the whole road · click a painted road to clear it'
@@ -300,11 +287,6 @@ function MapView({
             return boundaryEdit.shapes.length
                 ? 'Drag the white handles to adjust · add shapes: C circle, B box, F freeform · Enter: use it · Esc: cancel'
                 : 'Add a shape: C circle, B box, F freeform · Esc: cancel';
-        }
-        if (mode === 'input' && favoritesView) {
-            return favoritesView.paths.length
-                ? 'Click a favorite to show it · the tools filter favorites · Backspace: back to the plan'
-                : null;
         }
         if (mode === 'input' && pendingMarker) {
             return addingToName
@@ -437,12 +419,11 @@ function MapView({
                 <PanInteractions
                     enabled={!activeTool && !boundaryEdit}
                     mode={mode}
-                    paths={mode === 'display' ? filteredPaths : favoritesView?.paths || null}
-                    currentPathId={(mode === 'display' ? currentPath?.id : favoritesView?.current?.id) ?? null}
+                    paths={mode === 'display' ? filteredPaths : null}
+                    currentPathId={(mode === 'display' ? currentPath?.id : null) ?? null}
                     selections={selectionsShown ? drawnSelections : null}
-                    onSelectPath={mode === 'display' ? onSelectPath : favoritesView?.onSelect}
-                    onMoveStart={favoritesView ? null : onMapClick}
-                    onClickAway={favoritesView?.onClickAway || null}
+                    onSelectPath={mode === 'display' ? onSelectPath : null}
+                    onMoveStart={onMapClick}
                     onRemoveSelection={onRemoveSelection}
                 />
 
@@ -487,8 +468,8 @@ function MapView({
                     />
                 )}
 
-                {/* Pending marker (blue) - shown while user is picking a spot (not in the Favorites tab) */}
-                {pendingMarker && mode === 'input' && !favoritesView && (
+                {/* Pending marker (blue) - shown while user is picking a spot (hidden while a pin's routes are previewed) */}
+                {pendingMarker && mode === 'input' && !pinPreviewKey && !(previewPaths?.length > 0) && (
                     <PathMarker
                         position={pendingMarker}
                         color="pending"
@@ -499,25 +480,45 @@ function MapView({
                     />
                 )}
                 {/* The automatic search area (max / 2 around the start), when no custom boundary replaces it */}
-                {reachArea && <ReachOutline lat={reachArea.lat} lng={reachArea.lng} miles={reachArea.miles} />}
+                {reachArea && !pinPreviewKey && !(previewPaths?.length > 0) && <ReachOutline lat={reachArea.lat} lng={reachArea.lng} miles={reachArea.miles} />}
 
-                {/* Every generation's pin (one per start); click for its menu: open one, or a new set there.
-                    On the Favorites page, a pin per start of the favorites listed instead. */}
-                {favoritePins ? <FavoritePins {...favoritePins} /> : (
-                    <SetPins
-                        markers={pathSetMarkers}
-                        mode={mode}
-                        activePathSetId={activePathSetId}
-                        hoveredSetId={hoveredSetId}
-                        onOpen={onMarkerClick}
-                        onNewSet={onNewSetAt}
-                        onShowAll={onShowAllAt}
-                    />
-                )}
+                {/* Every set's pin (one per start): hover previews, click opens, right-click for its menu. */}
+                <SetPins
+                    markers={pathSetMarkers}
+                    mode={mode}
+                    activePathSetId={activePathSetId}
+                    hoveredSetId={hoveredSetId}
+                    favoritesOnly={favoritesOnly}
+                    previewKey={pinPreviewKey}
+                    isFavoriteKey={isFavoriteKey}
+                    previewIds={previewSetIds}
+                    onPreview={onPinPreview}
+                    onOpen={onMarkerClick}
+                    onNewSet={onNewSetAt}
+                    onShowAll={onShowAllAt}
+                />
                 {/* A pin's menu closes at a click anywhere else (on the map that click does nothing more) */}
                 <MenuDismiss />
                 <MapFocus centre={centreOn} show={showBounds} />
-                <ViewReporter onChange={favoritesView ? onViewChange : null} />
+                <ViewReporter onChange={onViewChange} />
+
+                {/* A pin (or set) under the pointer while planning: its routes, faint */}
+                {mode === 'input' && previewPaths?.length > 0 && (
+                    <PathRenderer
+                        currentPath={null}
+                        filteredPaths={previewPaths}
+                        backgroundPane="backgroundPaths"
+                        activePane="activePath"
+                        casingPane="routeCasing"
+                        showArrows={false}
+                        showCentroids={false}
+                        primaryColor={primaryColor}
+                        showPathPreview
+                        pathPreviewOpacity={Math.max(0.9, pathPreviewOpacity)} // no bold route here: stronger than the usual faint ones
+                        isFavorite={isFavorite}
+                        favoriteHue={favoriteHue}
+                    />
+                )}
 
                 {/* Path rendering */}
                 {mode === 'display' && activePathSetId && (
@@ -531,7 +532,7 @@ function MapView({
                         showCentroids={showCentroids}
                         primaryColor={primaryColor}
                         showPathPreview={showPathPreview}
-                        pathPreviewOpacity={pathPreviewOpacity}
+                        pathPreviewOpacity={strongPreview ? Math.max(0.9, pathPreviewOpacity) : pathPreviewOpacity}
                         hoveredPathId={hoveredPathId}
                         isFavorite={isFavorite}
                         favoriteHue={favoriteHue}
@@ -543,33 +544,6 @@ function MapView({
                         profile={currentPath?.properties?.elevation_profile}
                         enabled={!activeTool}
                         color={`hsl(${primaryColor}, 85%, 55%)`}
-                        pane="activePath"
-                    />
-                )}
-
-                {/* The plan's Favorites tab: every favorite (the selected one bold) */}
-                {mode === 'input' && favoritesView && (
-                    <PathRenderer
-                        currentPath={favoritesView.current}
-                        filteredPaths={favoritesView.paths}
-                        backgroundPane="backgroundPaths"
-                        activePane="activePath"
-                        casingPane="routeCasing"
-                        showArrows={showArrows}
-                        showCentroids={showCentroids}
-                        primaryColor={primaryColor}
-                        showPathPreview
-                        pathPreviewOpacity={pathPreviewOpacity}
-                        hoveredPathId={favoritesView.hoveredId}
-                        isFavorite={isFavorite}
-                        favoriteHue={favoriteHue}
-                    />
-                )}
-                {mode === 'input' && favoritesView?.current && (
-                    <RouteHover
-                        profile={favoritesView.current.properties?.elevation_profile}
-                        enabled={!activeTool}
-                        color={`hsl(${favoriteHue}, 85%, 50%)`}
                         pane="activePath"
                     />
                 )}

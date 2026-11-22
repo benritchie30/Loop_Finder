@@ -9,16 +9,16 @@ import { useWebSocket } from './hooks/useWebSocket';
 import { useAppMode } from './hooks/useAppMode';
 import { usePathSets, suggestGenerationName } from './hooks/usePathSets';
 import { useFavorites } from './hooks/useFavorites';
-import { useFavoritesView } from './hooks/useFavoritesView';
 import { applyPaint } from './utils/paintRoads';
 import { normalizeRoadWeights } from './utils/roadWeights';
-import { buildRoadIndex, edgeKey } from './utils/graphRoads';
-import { roadTilesState, tilesInBounds, tilesNearView } from './utils/mapTiles';
+import { buildRoadIndex } from './utils/graphRoads';
 import { mapProgressText, nextProgress } from './utils/mapProgress';
 import { MAX_ROUTE_MILES, UnitsContext, readUnits } from './utils/units';
 import { placeNameAt } from './utils/geocode';
-import { chosenSet, setsAtStart } from './utils/pathSetGroups';
+import { chosenSet, sameStart, setsAtStart } from './utils/pathSetGroups';
 import { routeKey } from './utils/routeIdentity';
+import { isKeptId } from './utils/keptSets';
+import { ALL_SETS } from './utils/combinedSets';
 import { downloadRouteGpx } from './utils/gpx';
 import { surfacePreference } from './utils/surface';
 import { automaticArea, boundaryBounds, boundaryContains, boundaryKey, boundaryPayload, cleanShapes, simplifyOutline } from './utils/boundary';
@@ -64,7 +64,6 @@ const LENGTH_LIMITS_MI = [0.6, MAX_ROUTE_MILES];
 const UNDO_MS = 7000;
 const EDGE_SETS_KEPT = 4; // road layers of recent areas kept in the browser
 const TILE_ROADS_KEPT = 80; // offline basemap: roads of this many map tiles kept in the browser
-const SEGMENT_TILES_KEPT = 40; // Favorites tab: road pieces of this many map tiles kept for painting
 
 const SETTING_DEFAULTS = {
   min_path_len: 15,
@@ -198,7 +197,7 @@ function favoriteHueOf(primaryHue) {
 
 function App() {
   const { status: wsStatus, sendMessage, subscribe } = useWebSocket();
-  const { favorites, isFavorite, toggleFavorite } = useFavorites();
+  const { favorites, isFavorite, toggleFavorite, removeFavorites } = useFavorites();
 
   const {
     pathSets,
@@ -208,6 +207,7 @@ function App() {
     filteredPaths,
     totalPathsCount,
     allPaths,
+    chosenTotal,
     combined,
     generations,
     routeFilters,
@@ -247,6 +247,7 @@ function App() {
     reverseCurrentPathProfile,
     showCombined,
     setCombinedTarget,
+    chooseCombinedSet,
     favoritesOnly,
     showFavoritesOnly,
     keepListed,
@@ -343,20 +344,7 @@ function App() {
     edgesRequested.current = new Set();
     openRequested.current = new Set();
     tilesRequested.current = new Set();
-    segmentsRequested.current = new Set();
   }, [wsStatus]);
-
-  // Road pieces straight from map tiles (GET_ROAD_SEGMENTS): the Favorites
-  // tab paints roads with them, with no start pin or area needed.
-  const [roadSegments, setRoadSegments] = useState({}); // "row_col" -> [{u, v, name, pts}]
-  const segmentsRequested = useRef(new Set());
-  const requestRoadSegments = useCallback((tiles) => {
-    const wanted = tiles.filter(([r, c]) => !segmentsRequested.current.has(`${r}_${c}`));
-    if (!wanted.length) return;
-    if (sendMessage('GET_ROAD_SEGMENTS', { tiles: wanted })) {
-      wanted.forEach(([r, c]) => segmentsRequested.current.add(`${r}_${c}`));
-    }
-  }, [sendMessage]);
 
   const requestTileRoads = useCallback((tiles) => {
     const wanted = tiles.filter(([r, c]) => !tilesRequested.current.has(`${r}_${c}`));
@@ -406,6 +394,7 @@ function App() {
     if (wsStatus !== 'connected' || mode !== 'display' || !activePathSetId) return;
     if (areaOfPathSet[activePathSetId] || openRequested.current.has(activePathSetId)) return;
     if (activeIsGenerating) return; // its own messages bring the area
+    if (isKeptId(activePathSetId)) return; // favorites from deleted sets: no area of their own
     const rebuild = rebuildFor(activePathSetId);
     if (sendMessage('OPEN_GENERATION', { pathSetId: activePathSetId, rebuild })) {
       openRequested.current.add(activePathSetId);
@@ -439,6 +428,8 @@ function App() {
       switch (message.type) {
         case 'PATHSET_CREATED':
           createPathSet(message.pathSetId, message.markerPosition, pendingGenerations.current.shift() || null);
+          // A new set's routes are shown, not only its favorites (it has none yet).
+          showFavoritesOnly(false);
           // The generation's pin takes the start pin's place.
           clearPendingMarker();
           setMode('display');
@@ -549,21 +540,6 @@ function App() {
           }
           break;
 
-        case 'ROAD_SEGMENTS': {
-          if (!Array.isArray(message.tile)) break;
-          const key = `${message.tile[0]}_${message.tile[1]}`;
-          setRoadSegments((prev) => {
-            const keys = Object.keys(prev).filter((k) => k !== key);
-            const keep = keys.slice(-(SEGMENT_TILES_KEPT - 1));
-            keys.slice(0, keys.length - keep.length).forEach((k) => segmentsRequested.current.delete(k));
-            const next = {};
-            keep.forEach((k) => { next[k] = prev[k]; });
-            next[key] = message.lines || [];
-            return next;
-          });
-          break;
-        }
-
         case 'TILE_ROADS': {
           if (!Array.isArray(message.tile)) break;
           const key = `${message.tile[0]}_${message.tile[1]}`;
@@ -586,7 +562,7 @@ function App() {
     });
     return unsubscribe;
   }, [subscribe, createPathSet, addPathToSet, completePathSet, resumePathSet, expirePathSetSession,
-    updateSelection, removeSelection, showNotice, setMode, clearPendingMarker, placeMarker, clearGenStatus]);
+    updateSelection, removeSelection, showNotice, setMode, clearPendingMarker, placeMarker, clearGenStatus, showFavoritesOnly]);
 
   // ---- start pin ----
   // A start pin placed by hand (a click, a drag, a search) drops any earlier
@@ -659,47 +635,24 @@ function App() {
   // Length and roads for the open generation's next batches (the More routes slider).
   const [moreSettings, setMoreSettings] = useState(null);
 
-  // The plan ('loops': the plan and Your loops) or the Favorites page
-  // ('favorites': every favorite, on the map too; the plan's Favorites button).
-  const [planTab, setPlanTab] = useState('loops');
-  const favoritesTab = mode === 'input' && planTab === 'favorites';
-
-  // Each tab keeps its own painted roads and areas: the plan's go with Find
-  // loops; the Favorites tab's only filter favorites (and may come from road
-  // pieces the server does not know as graph edges). Switching tabs swaps
-  // them; coming back from a generation to Favorites brings its ones back
-  // (to Your loops, the plan starts clear, as before).
-  const selectionTab = mode === 'input' ? planTab : null;
-  const tabSelections = useRef({ loops: [], favorites: [] });
-  const lastSelectionTab = useRef(selectionTab);
-  useEffect(() => {
-    const prev = lastSelectionTab.current;
-    if (prev === selectionTab) {
-      if (selectionTab) tabSelections.current[selectionTab] = drawnSelections;
-      return;
-    }
-    lastSelectionTab.current = selectionTab;
-    if (selectionTab === 'favorites') replaceSelections(tabSelections.current.favorites);
-    else if (selectionTab === 'loops' && prev === 'favorites') replaceSelections(tabSelections.current.loops);
-  }, [selectionTab, drawnSelections, replaceSelections]);
-  const planSelections = favoritesTab ? tabSelections.current.loops : drawnSelections;
+  const planSelections = drawnSelections;
 
   // Generations that start where the pin is: Find loops can add to one of
   // them instead of making another one. A new set unless one is picked in
   // "Loops from here" (or by "Plan again from here"), even when the pin was
   // placed by hand on their start. startChoice: { pin, id } (id null: a new set).
   const setsHere = useMemo(
-    () => (mode === 'input' && pendingMarker ? setsAtStart(generations, pendingMarker) : []),
+    () => (mode === 'input' && pendingMarker ? setsAtStart(generations, pendingMarker).filter((g) => !g.kept) : []),
     [mode, pendingMarker, generations],
   );
   // Dev compare: the other generations from the open one's start, newest first.
   const compareCandidates = useMemo(
-    () => (devMode && mode === 'display' && activeGeneration && !combined
-      ? setsAtStart(generations, activeGeneration.markerPosition).filter((g) => g.id !== activeGeneration.id)
+    () => (devMode && mode === 'display' && activeGeneration && (!combined || combined.chosenSetId)
+      ? setsAtStart(generations, activeGeneration.markerPosition).filter((g) => g.id !== activeGeneration.id && !g.kept)
       : []),
     [devMode, mode, activeGeneration, generations, combined],
   );
-  const compareProps = devMode && activeGeneration && !combined ? {
+  const compareProps = devMode && activeGeneration && !activeGeneration.kept && (!combined || combined.chosenSetId) ? {
     candidates: compareCandidates,
     compare,
     onStart: startCompare,
@@ -731,22 +684,32 @@ function App() {
     });
     if (!sent) return false;
     setActiveTool(null);
-    selectPathSet(id, planSelections);
-    setPlanTab('loops');
+    showFavoritesOnly(false); // (the new routes are shown, not only favorites)
+    // At a start with other sets: all routes from there, this set's chip chosen (with its painted roads and the plan's).
+    const at = set.markerPosition;
+    if (at && Object.entries(pathSets).some(([other, x]) => other !== id && sameStart(x.markerPosition, at))) {
+      showCombined(at, { chosenId: id });
+      replaceSelections(selections);
+    } else {
+      selectPathSet(id, planSelections);
+    }
     updatePathSetSettings(id, settings);
     setMoreSettings(null);
     clearPendingMarker();
     setMode('display');
     return true;
-  }, [pathSets, genSettings, pickAlgorithm, planSelections, sendMessage, rebuildFor, selectPathSet,
-    updatePathSetSettings, clearPendingMarker, setMode]);
+  }, [pathSets, genSettings, pickAlgorithm, planSelections, sendMessage, rebuildFor, selectPathSet, showCombined, replaceSelections,
+    updatePathSetSettings, clearPendingMarker, setMode, showFavoritesOnly]);
 
   const startGeneration = useCallback(() => {
     if (mode !== 'input' || !pendingMarker) return;
     if (addToId && addToGeneration(addToId)) return;
     const algorithmId = pickAlgorithm(genSettings.algorithm);
-    // Named after the place ("Dilworth, Charlotte"); a second one from there gets " 2".
-    const place = pinName || `${pendingMarker.lat.toFixed(3)}, ${pendingMarker.lng.toFixed(3)}`;
+    // Named after the place ("Dilworth, Charlotte"); another one from there gets " #2", " #3"...
+    // At a start that has sets, its place is theirs (the oldest's name, without its number).
+    const oldestHere = setsHere.length ? setsHere[setsHere.length - 1] : null;
+    const place = (oldestHere ? oldestHere.name.replace(/\s+#?\d+$/, '') : null)
+      || pinName || `${pendingMarker.lat.toFixed(3)}, ${pendingMarker.lng.toFixed(3)}`;
     const name = suggestGenerationName(place, pathSets);
     const settings = { ...searchSettingsOf(genSettings), algorithm: algorithmId };
     // Roads and areas painted before generating constrain the first search too.
@@ -758,85 +721,35 @@ function App() {
     });
     if (!sent) return;
     pendingGenerations.current.push({ name, settings, selections: planSelections });
-    setPlanTab('loops');
     localStorage.setItem('lastMapPosition', JSON.stringify({ center: [pendingMarker.lat, pendingMarker.lng], zoom: 13 }));
   }, [mode, pendingMarker, addToId, addToGeneration, genSettings, pathSets, sendMessage, planSelections,
-    pickAlgorithm, pinName]);
+    pickAlgorithm, pinName, setsHere]);
 
   // A generation under the pointer in "Your loops": its pin is highlighted.
   // Map moves asked for by the panel: centreOn { lat, lng, n } (a generation
-  // opened from a list, a start placed from Favorites), showBounds
-  // { bounds, n } (a favorite selected in the list). n makes a repeat act.
+  // opened from a list), showBounds { bounds, n } (a boundary chosen). n makes a repeat act.
+  // A row (its set's id) or a start's header ([its sets' ids]) under the pointer in "Your loops".
   const [hoveredSetId, setHoveredSetId] = useState(null);
+  // The map's view (MapView reports it when the map stops): Your loops lists the starts in it first.
+  const [mapView, setMapView] = useState(null);
+  // A pin under the pointer (or a set in its menu): { key (the pin), ids
+  // (its sets) }, their routes previewed on the map and the other pins hidden.
+  const [pinPreview, setPinPreview] = useState(null);
+  // (next, fromKey): a pin's preview ends only if it is still that pin's.
+  const handlePinPreview = useCallback((next, fromKey = null) => {
+    setPinPreview((prev) => {
+      if (next) return next;
+      if (fromKey && prev && prev.key !== fromKey) return prev;
+      return null;
+    });
+  }, []);
   const [centreOn, setCentreOn] = useState(null);
   const [showBounds, setShowBounds] = useState(null);
   const centreMapOn = useCallback((position) => {
     if (position) setCentreOn((prev) => ({ lat: position.lat, lng: position.lng, n: (prev?.n || 0) + 1 }));
   }, []);
 
-  // The map's view while the Favorites page is open (MapView reports it when
-  // the map stops): mapView follows every move (road pieces load for it);
-  // orderView only the user's (the page's group order and "In map view"), so
-  // the app bringing a selected favorite into view never reorders the list.
-  const [mapView, setMapView] = useState(null);
-  const [orderView, setOrderView] = useState(null);
-  const handleViewChange = useCallback((view) => {
-    setMapView(view);
-    if (!view.byApp) setOrderView(view);
-  }, []);
-  const favView = useFavoritesView({ favorites, generations, pathSets, selections: drawnSelections, orderView });
-  const { paths: favPaths, current: favCurrent } = favView;
-
-  // The Favorites tab paints roads from the road pieces of the downloaded
-  // map tiles under favorites (no start pin or area needed): only those in
-  // or near the map's view (utils/mapTiles.tilesNearView), so favorites in
-  // another city load nothing until the map goes there. favoriteTiles: the
-  // downloaded tiles under every favorite.
-  const favoriteTiles = useMemo(() => {
-    if (!mapCoverage?.tiles) return [];
-    const have = new Set(mapCoverage.tiles.map(([r, c]) => `${r}_${c}`));
-    const out = new Map();
-    favorites.forEach((record) => {
-      const coords = record.path?.geometry?.coordinates || [];
-      if (!coords.length) return;
-      let [south, west, north, east] = [90, 180, -90, -180];
-      coords.forEach(([lng, lat]) => {
-        south = Math.min(south, lat); north = Math.max(north, lat);
-        west = Math.min(west, lng); east = Math.max(east, lng);
-      });
-      tilesInBounds({ south, west, north, east }, mapCoverage.deg).forEach(([r, c]) => {
-        if (have.has(`${r}_${c}`)) out.set(`${r}_${c}`, [r, c]);
-      });
-    });
-    return [...out.values()];
-  }, [favorites, mapCoverage]);
-  const favRoadTilesNow = useMemo(
-    () => (favoritesTab ? tilesNearView(favoriteTiles, mapView, { deg: mapCoverage?.deg }) : { tiles: [], tooMany: false }),
-    [favoritesTab, favoriteTiles, mapView, mapCoverage],
-  );
-  // The same tiles stay the same value while the map moves over them (the index is not rebuilt).
-  const favRoadKey = `${favRoadTilesNow.tooMany ? 'zoom|' : ''}${favRoadTilesNow.tiles.map(([r, c]) => `${r}_${c}`).join(',')}`;
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const favRoadTiles = useMemo(() => favRoadTilesNow, [favRoadKey]);
-  useEffect(() => {
-    if (favoritesTab && wsStatus === 'connected' && favRoadTiles.tiles.length) requestRoadSegments(favRoadTiles.tiles);
-  }, [favoritesTab, wsStatus, favRoadTiles, requestRoadSegments]);
-  // 'zoom' | 'none' | 'loading' | 'ready' (the Road tool's hint says "Loading roads…" and so on).
-  const favRoadsState = favoritesTab ? roadTilesState(favRoadTiles, ([r, c]) => !!roadSegments[`${r}_${c}`]) : null;
-  const favRoadIndex = useMemo(() => {
-    if (!favoritesTab) return null;
-    const seen = new Set();
-    const lines = [];
-    favRoadTiles.tiles.forEach(([r, c]) => (roadSegments[`${r}_${c}`] || []).forEach((line) => {
-      const key = edgeKey(line.u, line.v);
-      if (seen.has(key)) return; // a road crossing two tiles comes with both
-      seen.add(key);
-      lines.push(line);
-    }));
-    return lines.length ? buildRoadIndex(lines) : null;
-  }, [favoritesTab, favRoadTiles, roadSegments]);
-  // The roads the Road tool paints: the Favorites tab's, else the start pin's or the open generation's area.
-  const toolRoadIndex = favoritesTab ? favRoadIndex : roadIndex;
+  const toolRoadIndex = roadIndex;
 
   // ---- search boundaries ----
   // The plan uses the automatic area (every road within reach of the start)
@@ -858,14 +771,12 @@ function App() {
   }, [boundaries, showBoundaryOnMap]);
   const newBoundary = useCallback(() => {
     setActiveTool(null);
-    setPlanTab('loops');
     setBoundaryDraft({ id: null, name: '', shapes: [], tool: 'box' });
   }, []);
   const editBoundary = useCallback(() => {
     const b = genSettings.boundary;
     if (!b) return;
     setActiveTool(null);
-    setPlanTab('loops');
     setBoundaryDraft({ id: b.id, name: b.name, shapes: cleanShapes(b.shapes), tool: null });
     showBoundaryOnMap(b);
   }, [genSettings.boundary, showBoundaryOnMap]);
@@ -901,20 +812,29 @@ function App() {
   }, [boundaryDraft, deleteBoundary]);
 
   // ---- open generation ----
-  // Open a generation. { favorites: true } opens it in favorites only;
-  // { routeKey } shows the route with that key (utils/routeIdentity) when it has it.
+  // Open a generation. { routeKey } shows the route with that key
+  // (utils/routeIdentity) when it has it. Favorites only stays as it is.
+  // A set whose start has other sets opens as all routes from there with its
+  // chip chosen (only its routes; the other sets one click away).
   const openGeneration = useCallback((id, options = {}) => {
     setActiveTool(null);
     setBoundaryDraft(null);
     setHoveredSetId(null);
+    setPinPreview(null);
+    const at = pathSets[id]?.markerPosition;
+    const shared = at && Object.entries(pathSets).some(([other, set]) => other !== id && sameStart(set.markerPosition, at));
+    if (shared) {
+      showCombined(at, { chosenId: id, routeKey: options.routeKey });
+      setMode('display');
+      return;
+    }
     selectPathSet(id);
-    if (options.favorites) showFavoritesOnly(true);
     if (options.routeKey) {
       const route = (pathSets[id]?.paths || []).find((p) => routeKey(p) === options.routeKey);
       if (route) selectPath(route.id);
     }
     setMode('display');
-  }, [selectPathSet, showFavoritesOnly, pathSets, selectPath, setMode]);
+  }, [selectPathSet, showCombined, pathSets, selectPath, setMode]);
 
   // The generation a listed route is from: the open one, or in all routes
   // from here the set it is listed as.
@@ -952,15 +872,23 @@ function App() {
     centreMapOn(pathSets[id]?.markerPosition);
   }, [openGeneration, centreMapOn, pathSets]);
 
-  // ---- the plan's Favorites tab ----
-  // A pin opens its generation in favorites only (the selected favorite shown, if it is there).
+  // Bring the routes of these sets into view, when they are not (the map
+  // never zooms in for them; MapFocus).
+  const showSetsOnMap = useCallback((ids) => {
+    let [s, w, n, e] = [90, 180, -90, -180];
+    ids.forEach((id) => (pathSets[id]?.paths || []).forEach((p) => {
+      (p.geometry?.coordinates || []).forEach(([lng, lat]) => {
+        s = Math.min(s, lat); n = Math.max(n, lat); w = Math.min(w, lng); e = Math.max(e, lng);
+      });
+    }));
+    if (s > n) return;
+    setShowBounds((prev) => ({ bounds: [[s, w], [n, e]], n: (prev?.n || 0) + 1 }));
+  }, [pathSets]);
+  // A pin's set, opened by a click (a start with one set) or from its menu.
   const openFromPin = useCallback((id) => {
-    if (!favoritesTab) {
-      openGeneration(id);
-      return;
-    }
-    openGeneration(id, { favorites: true, routeKey: favCurrent ? routeKey(favCurrent) : null });
-  }, [favoritesTab, openGeneration, favCurrent]);
+    openGeneration(id);
+    showSetsOnMap([id]);
+  }, [openGeneration, showSetsOnMap]);
   // "New set from here" in a pin's menu: the plan, with the start pin on that
   // start and New set chosen; the plan keeps its own settings, and nothing
   // is searched until Find loops.
@@ -972,95 +900,31 @@ function App() {
     setHoveredSetId(null);
     selectPathSet(null);
     setMode('input');
-    setPlanTab('loops');
     placeMarker(pin);
     setStartChoice({ pin, id: null });
   }, [selectPathSet, setMode, placeMarker]);
-  // "Show all routes from here" in a pin's menu (two or more sets there):
-  // their routes as one list; More routes adds to the newest (or the one chosen).
-  // options: { favorites, routeKey } (the Favorites page's Open, grouped by start).
+  // All routes from here (a click on a pin of two or more sets, or "Show all
+  // routes from here" in its menu): their routes as one list; More routes
+  // adds to the newest (or the one chosen). options: { routeKey }.
   const openCombined = useCallback((position, options = {}) => {
     if (!position) return;
     setActiveTool(null);
     setBoundaryDraft(null);
     setHoveredSetId(null);
+    setPinPreview(null);
     showCombined(position, options);
     setMode('display');
-  }, [showCombined, setMode]);
-  const selectFavorite = useCallback((id) => {
-    favView.select(id);
-    const path = favView.paths.find((p) => p.id === id);
-    const coords = path?.geometry?.coordinates || [];
-    if (!coords.length) return;
-    let [s, w, n, e] = [90, 180, -90, -180];
-    coords.forEach(([lng, lat]) => {
-      s = Math.min(s, lat); n = Math.max(n, lat); w = Math.min(w, lng); e = Math.max(e, lng);
-    });
-    setShowBounds((prev) => ({ bounds: [[s, w], [n, e]], n: (prev?.n || 0) + 1 }));
-  }, [favView]);
-  // Unfavorite (it stays listed until another is selected), or favorite again.
-  const toggleListedFavorite = useCallback((path) => {
-    const record = favView.recordOf(path);
-    const source = record ? { id: record.pathSetId, name: record.setName, markerPosition: record.start } : null;
-    if (toggleFavorite(path, source) === false) favView.keepListed(record);
-  }, [favView, toggleFavorite]);
-  const exportFavoriteGpx = useCallback((path) => {
-    exportGpx(path, { setName: favView.recordOf(path)?.setName });
-  }, [exportGpx, favView]);
-  const planAt = useCallback((position) => {
-    if (!position) return;
-    setStartChoice(null);
-    placeMarker({ lat: position.lat, lng: position.lng });
-    setPlanTab('loops');
-    centreMapOn(position);
-  }, [placeMarker, centreMapOn]);
-  // A favorite's set by itself, favorites only, on that route (its set deleted: plan there).
-  const openFavoriteSet = useCallback((setId, record) => {
-    if (setId && pathSets[setId]) openGenerationFromList(setId, { favorites: true, routeKey: record?.key });
-    else if (record) planAt(record.start || null);
-  }, [pathSets, openGenerationFromList, planAt]);
-  const favoritesPageProps = favoritesTab ? {
-    view: favView,
-    onBack: () => setPlanTab('loops'),
-    onSelect: selectFavorite,
-    isFavorite,
-    onToggleFavorite: toggleListedFavorite,
-    onDownloadGpx: exportFavoriteGpx,
-    // Grouped by start, Open opens all routes from that start (two or more
-    // sets there), favorites only; else the group's set, favorites only.
-    onOpenGroup: (group) => {
-      const selected = group.records.find((r) => r.path.id === favView.selectedId) || group.records[0];
-      if (favView.grouping === 'start' && group.setIds.length > 1 && group.position) {
-        openCombined(group.position, { favorites: true, routeKey: selected?.key });
-        centreMapOn(group.position);
-      } else {
-        openFavoriteSet(group.setId, selected);
-      }
-    },
-    onPlanHere: (group) => planAt(group.position),
-    onOpenSet: (path) => {
-      const record = favView.recordOf(path);
-      openFavoriteSet(record?.pathSetId, record);
-    },
-    setNameOf: (path) => {
-      const record = favView.recordOf(path);
-      const set = record?.pathSetId ? generations.find((g) => g.id === record.pathSetId) : null;
-      if (set) return set.name;
-      return record?.setName ? `${record.setName} (deleted)` : null;
-    },
-  } : null;
-  // The Favorites page's pins: one per start of the favorites listed.
-  const favListed = useMemo(() => favView.groups.flatMap((g) => g.records), [favView.groups]);
-  const favoritePins = favoritesTab ? {
-    records: favListed,
-    generations,
-    highlight: favView.highlight,
-    onHoverStart: favView.setHoverStart,
-    onShow: (group) => { if (group.records[0]) selectFavorite(group.records[0].path.id); },
-    onOpenSet: (setId, group) => openFavoriteSet(setId, group.records.find((r) => r.pathSetId === setId) || null),
-    onShowAll: openCombined,
-    onNewSet: newSetFromPin,
-  } : null;
+    showSetsOnMap(generations.filter((g) => sameStart(g.markerPosition, position)).map((g) => g.id));
+  }, [showCombined, setMode, showSetsOnMap, generations]);
+  // Your loops: a start's name opens all its sets (all routes from there; one set by itself).
+  const openGroupFromList = useCallback((group) => {
+    if (group.kept || group.sets.length === 1 || !group.position) {
+      openGenerationFromList(group.sets[0].id);
+      return;
+    }
+    openCombined(group.position);
+    centreMapOn(group.position);
+  }, [openGenerationFromList, openCombined, centreMapOn]);
 
   const closeGeneration = useCallback(() => {
     setActiveTool(null);
@@ -1090,18 +954,48 @@ function App() {
   // Delete with undo.
   const [undo, setUndo] = useState(null); // { removed, name }
   const undoTimer = useRef(null);
+  // The kept set (favorites from deleted sets): Remove unfavorites them, for good, after asking.
+  // A generation with favorites: they stay, in the kept set ("… favorites kept").
   const handleDeleteGeneration = useCallback((id) => {
-    const name = pathSets[id]?.name;
+    const set = pathSets[id];
+    if (set?.kept) {
+      const n = set.paths.length;
+      const ok = window.confirm(n === 1
+        ? 'Remove the favorite from deleted sets? It is unfavorited and cannot be brought back.'
+        : `Remove all ${n} favorites from deleted sets? They are unfavorited and cannot be brought back.`);
+      if (!ok) return;
+      removeFavorites(set.paths);
+      if (id === activePathSetId) {
+        setActiveTool(null);
+        selectPathSet(null);
+        setMode('input');
+      }
+      return;
+    }
+    const name = set?.name;
+    // Its favorites (saved with it) go to the kept set, "Favorites from deleted sets".
+    const keptCount = [...favorites.values()].filter((r) => r.pathSetId === id).length;
     const removed = deletePathSet(id);
     if (!removed) return;
-    if (id === activePathSetId) {
+    // (in all routes from a start with other sets left, they stay listed)
+    if (id === activePathSetId && !(combined && removed.stays)) {
       setActiveTool(null);
+      selectPathSet(null);
       setMode('input');
     }
     clearTimeout(undoTimer.current);
-    setUndo({ removed, name });
+    setUndo({ removed, name, keptCount });
     undoTimer.current = setTimeout(() => setUndo(null), UNDO_MS);
-  }, [pathSets, deletePathSet, activePathSetId, setMode]);
+  }, [pathSets, favorites, deletePathSet, removeFavorites, selectPathSet, activePathSetId, setMode, combined]);
+
+  // The open set went away (a kept set's last favorite unfavorited): back to the plan.
+  useEffect(() => {
+    if (mode === 'display' && activePathSetId && !pathSets[activePathSetId] && !combined) {
+      setActiveTool(null);
+      selectPathSet(null);
+      setMode('input');
+    }
+  }, [mode, activePathSetId, pathSets, combined, selectPathSet, setMode]);
   const handleUndoDelete = useCallback(() => {
     if (!undo) return;
     restorePathSet(undo.removed);
@@ -1200,16 +1094,11 @@ function App() {
   }, [undoLastSelection, canContinue, activeIsGenerating, drawnSelections.length, handleStopGeneration]);
 
   // ---- back / forward through the routes viewed ([ and ]) ----
-  // The route view: a new history each time a generation opens. The plan's
-  // Favorites tab: a new one each time the tab is entered. Hidden routes
+  // The route view: a new history each time a generation opens. Hidden routes
   // (filters, painted roads, favorites only) are skipped.
   const stepRouteHistory = useRouteHistory(
     mode === 'display' ? currentPath?.id ?? null : null,
     mode === 'display' ? combined?.key ?? activePathSetId : null,
-  );
-  const stepFavoriteHistory = useRouteHistory(
-    favoritesTab ? favCurrent?.id ?? null : null,
-    favoritesTab ? 'favorites' : null,
   );
 
   // ---- keyboard ----
@@ -1251,6 +1140,8 @@ function App() {
       }
 
       if (e.key === 'Enter' && mode === 'input') startGeneration();
+      // V: Favorites only on / off (the pins, Your loops and the lists), anywhere.
+      if (plain && !e.shiftKey && (e.key === 'v' || e.key === 'V')) showFavoritesOnly(!favoritesOnly);
 
       if (mode === 'display') {
         if (e.key === 'Escape') {
@@ -1259,7 +1150,9 @@ function App() {
             setActiveTool(null);
             return;
           }
+          // Esc steps back: a search stops first, then the set (or start) closes.
           if (isGenerating) handleStopGeneration();
+          else closeGeneration();
         }
         if (e.key === 'Backspace') {
           e.preventDefault();
@@ -1282,42 +1175,16 @@ function App() {
         if (plain && (e.key === 's' || e.key === 'S')) toggleRouteFavorite(currentPath);
       }
 
-      // The plan's Favorites tab: arrows step through the favorites, S
-      // unfavorites (or favorites again) the selected one, Esc deselects it.
-      // Backspace: back to the plan (a tool on or not, as from an open generation).
-      if (mode === 'input' && planTab === 'favorites' && e.key === 'Backspace' && tag !== 'INPUT') {
-        e.preventDefault();
-        setActiveTool(null);
-        setPlanTab('loops');
-        return;
-      }
-      if (mode === 'input' && planTab === 'favorites' && !activeTool) {
-        if (['ArrowRight', 'ArrowDown', 'ArrowLeft', 'ArrowUp'].includes(e.key)) {
-          e.preventDefault();
-          const id = favView.stepId(e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 1 : -1);
-          if (id) selectFavorite(id);
-          return;
-        }
-        if (plain && (e.key === 's' || e.key === 'S') && favCurrent) {
-          toggleListedFavorite(favCurrent);
-          return;
-        }
-        if (historyDir) {
-          e.preventDefault();
-          stepFavoriteHistory(historyDir, (id) => favView.paths.some((p) => p.id === id), selectFavorite);
-          return;
-        }
-        if (e.key === 'Escape' && favCurrent && !draftingRef.current?.()) {
-          favView.select(null);
-          return;
-        }
-      }
-
       // Tools: in the route view, and before generating (Plan card, Advanced).
       if (plain) {
+        // Esc while planning: a shape being drawn, else the tool, else the start pin goes.
         if (mode === 'input' && e.key === 'Escape') {
           if (draftingRef.current?.()) return;
           if (activeTool) setActiveTool(null);
+          else if (pendingMarker) {
+            clearPendingMarker();
+            setStartChoice(null);
+          }
         }
         const toolKeys = { c: 'circle', b: 'box', f: 'freeform', r: 'road' };
         const tool = toolKeys[e.key.toLowerCase()];
@@ -1330,9 +1197,9 @@ function App() {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [mode, startGeneration, closeGeneration, handleUndoSelection, handleMoreRoutes, nextPath, prevPath,
-    activeTool, isGenerating, handleStopGeneration, toggleRouteFavorite, currentPath, planTab, favView, favCurrent,
-    selectFavorite, toggleListedFavorite, editingBoundary, boundaryDraft, boundaryEdit, saveBoundaryDraft,
-    cancelBoundaryDraft, stepRouteHistory, stepFavoriteHistory, filteredPaths, selectPath]);
+    activeTool, isGenerating, handleStopGeneration, toggleRouteFavorite, currentPath, editingBoundary, boundaryDraft, boundaryEdit, saveBoundaryDraft,
+    cancelBoundaryDraft, stepRouteHistory, filteredPaths, selectPath, pendingMarker, clearPendingMarker,
+    favoritesOnly, showFavoritesOnly]);
 
   const toolsProps = {
     activeTool,
@@ -1340,8 +1207,7 @@ function App() {
     isExcludeMode,
     setIsExcludeMode,
     onUndo: handleUndoSelection,
-    // (the Favorites tab's Road tool is always there: its hint says when roads are loading)
-    roadIndexReady: favoritesTab || !!toolRoadIndex,
+    roadIndexReady: !!toolRoadIndex,
     drawnSelections,
     onClearSelections: clearDrawnSelections,
     selectionsHidden: !showSelections && !activeTool,
@@ -1373,44 +1239,19 @@ function App() {
       favoritesOnly,
       favoriteCount: favorites.size,
       favoriteKeys: [...favorites.keys()],
-      planTab,
-      favoritesShown: favoritesTab ? favPaths.length : 0,
-      favoritesOnMap: favoritesTab ? favView.mapPaths.length : 0, // faint routes shown (the focus's)
-      favoriteFocus: favoritesTab ? favView.focus?.id ?? null : null,
-      favoriteHighlight: favoritesTab ? favView.highlight : null, // the orange pin
-      // The Favorites page: its groups in order ({ key, title, near, n }), sort and grouping.
-      favoriteGroups: favoritesTab ? favView.groups.map((g) => ({
-        key: g.key, title: g.title, near: !!g.near, n: g.records.length,
-        top: g.records[0]?.path.id ?? null, // its first card
-        pos: g.position || null, sets: g.setIds.length,
-      })) : [],
-      favoritesSort: favView.sortBy,
-      favoritesAscending: favView.ascending,
-      favoritesGrouping: favView.grouping,
-      favoriteDates: favoritesTab ? favListed.map((r) => r.createdAt || 0) : [], // when each listed one was favorited
-      favoritesInView: favView.inView,
-      favoritePaths: favoritesTab ? favPaths : [],
       roadToolReady: !!toolRoadIndex,
-      // Favorites tab: tiles under favorites (all; in or near the view, whose road pieces are
-      // loaded; of those, not come yet), and what the Road tool can do ('zoom' | 'none' | 'loading' | 'ready').
-      favoriteTilesAll: favoritesTab ? favoriteTiles.length : 0,
-      favoriteTilesWanted: favRoadTiles.tiles.length,
-      favoriteTilesMissing: favRoadTiles.tiles.filter(([r, c]) => !roadSegments[`${r}_${c}`]).length,
-      favoriteRoads: favRoadsState,
       boundary: genSettings.boundary,
       boundaryDraft,
       boundaries,
       setBoundary: activePathSet?.settings?.boundary || null,
-      favoriteSelected: favoritesTab ? favCurrent?.id ?? null : null,
       currentFavorite: !!currentPath && isFavorite(currentPath),
       generations: generations.map(({ id, name, pathCount, markerPosition }) => ({ id, name, pathCount, markerPosition })),
       mapCoverage, // { deg, tiles }: the downloaded map tiles (MAP_INFO)
     };
   }, [mode, pendingMarker, activeTool, isExcludeMode, drawnSelections, currentPath, filteredPaths, totalPathsCount,
     isGenerating, sortBy, sortAscending, hoveredPathId, activePathSetId, generations, favoritesOnly, favorites,
-    isFavorite, planTab, favoritesTab, favPaths, favCurrent, toolRoadIndex, genSettings.boundary, boundaryDraft,
-    boundaries, activePathSet, mapCoverage, favoriteTiles, favRoadTiles, favRoadsState, roadSegments, combined, pathSets,
-    favView, favListed]);
+    isFavorite, toolRoadIndex, genSettings.boundary, boundaryDraft,
+    boundaries, activePathSet, mapCoverage, combined, pathSets]);
 
   // The automatic search area drawn on the map (grey dotted, like a custom
   // boundary): the plan's, around the start pin and following the length
@@ -1423,44 +1264,96 @@ function App() {
     miles: genSettings.max_path_len,
     boundary: genSettings.boundary,
     editing: editingBoundary,
-    favoritesTab,
   }, {
     start: activePathSet?.markerPosition,
     miles: currentMore?.max_path_len ?? activePathSet?.settings?.max_path_len,
     boundary: activePathSet?.settings?.boundary,
     show: showBoundary,
-  }), [mode, favoritesTab, editingBoundary, genSettings.boundary, genSettings.max_path_len,
+  }), [mode, editingBoundary, genSettings.boundary, genSettings.max_path_len,
     pendingMarker, showBoundary, activePathSet, currentMore]);
 
   // The route view's panel: the open generation, or all routes from here
   // (its own id, so choosing the set More routes adds to keeps the panel).
+  // With a set's chip chosen, the panel's header is that set's (name, settings, rename, delete).
   const panelGeneration = useMemo(() => {
     if (!activeGeneration || !combined) return activeGeneration;
-    return { ...activeGeneration, id: combined.key, name: 'All routes from here' };
-  }, [activeGeneration, combined]);
+    const chosen = combined.chosenSetId ? generations.find((g) => g.id === combined.chosenSetId) : null;
+    if (chosen) return { ...chosen, id: combined.key };
+    const n = combined.chosenSetIds.length;
+    return { ...activeGeneration, id: combined.key, name: n > 1 ? `${n} sets from here` : 'All routes from here' };
+  }, [activeGeneration, combined, generations]);
+  // A set chip under the pointer (all routes from here): the map shows only that set's routes.
+  const [chipHoverId, setChipHoverId] = useState(null);
+  useEffect(() => { setChipHoverId(null); }, [combined?.key]);
+  // (every route of that set, whichever chip is chosen; with Favorites only, its favorites)
+  // (All under the pointer: every route from the start)
+  const mapPaths = useMemo(() => (combined && chipHoverId
+    ? allPaths.filter((p) => (chipHoverId === ALL_SETS || combined.has(p.id, chipHoverId))
+      && (!favoritesOnly || favorites.has(routeKey(p))))
+    : filteredPaths), [combined, chipHoverId, allPaths, filteredPaths, favoritesOnly, favorites]);
+  const mapCurrentPath = mapPaths === filteredPaths || mapPaths.some((p) => p.id === currentPath?.id) ? currentPath : null;
   const combinedProps = useMemo(() => {
     if (!combined) return null;
     const byId = new Map(generations.map((g) => [g.id, g]));
+    const found = combined.setIds.map((id) => byId.get(id)).filter(Boolean); // newest first
+    const sets = [...found.filter((g) => !g.kept), ...found.filter((g) => g.kept)]; // (a kept set last)
     return {
-      sets: combined.setIds.map((id) => byId.get(id)).filter(Boolean), // newest first
+      sets,
+      // The set chips: All, then each set (Favorites only: each set with favorites).
+      chips: favoritesOnly ? sets.filter((g) => g.favoriteCount > 0) : sets,
+      chosenId: combined.chosenSetId, // the one chosen, when only one is
+      chosenIds: combined.chosenSetIds, // every chosen one ([]: All)
+      onChoose: chooseCombinedSet, // (id | null, add: Ctrl-click)
+      onHoverChip: setChipHoverId,
       targetId: activePathSetId, // More routes adds to this one
       onTarget: setCombinedTarget,
       // The set a route is listed as, and the others that found it too (names).
+      // (with a set's chip chosen, that set first when it found the route too)
       setOf: (path) => {
-        const owner = byId.get(combined.ownerOf(path.id));
+        let ownerId = combined.ownerOf(path.id);
+        let also = combined.alsoIn(path.id);
+        const chosen = combined.chosenSetIds.includes(ownerId) ? null : combined.chosenSetIds.find((id) => also.includes(id));
+        if (chosen) {
+          also = [ownerId, ...also.filter((id) => id !== chosen)];
+          ownerId = chosen;
+        }
+        const owner = byId.get(ownerId);
         if (!owner) return null;
-        return { id: owner.id, name: owner.name, also: combined.alsoIn(path.id).map((id) => byId.get(id)?.name).filter(Boolean) };
+        return { id: owner.id, name: owner.name, also: also.map((id) => byId.get(id)?.name).filter(Boolean) };
       },
       // Its set by itself, showing the same route.
+      // Its set's chip chosen (only that set's routes), on the same route.
       onOpenSet: (path) => {
         const id = combined.ownerOf(path.id);
-        if (id) openGeneration(id, { routeKey: routeKey(path) });
+        if (id) chooseCombinedSet(id);
       },
     };
-  }, [combined, generations, activePathSetId, setCombinedTarget, openGeneration]);
+  }, [combined, generations, activePathSetId, setCombinedTarget, chooseCombinedSet, favoritesOnly]);
 
-  // The elevation chart: the open generation's route, or the favorite selected in the Favorites tab.
-  const shownRoute = mode === 'display' ? currentPath : (favoritesTab ? favView.current : null);
+  // The routes a pin under the pointer previews (or a set in its menu, or a
+  // set's row in "Your loops"): its sets' routes, a route two of them found
+  // once; with Favorites only, just the favorites. Only while planning.
+  const previewIds = mode === 'input' && !editingBoundary
+    ? (pinPreview?.ids || (hoveredSetId ? [].concat(hoveredSetId) : null))
+    : null;
+  const previewIdsKey = previewIds ? previewIds.join('|') : '';
+  const previewPaths = useMemo(() => {
+    if (!previewIdsKey) return null;
+    const seen = new Set();
+    const out = [];
+    previewIdsKey.split('|').forEach((id) => (pathSets[id]?.paths || []).forEach((p) => {
+      const key = routeKey(p) || p.id;
+      if (seen.has(key) || (favoritesOnly && !favorites.has(key))) return;
+      seen.add(key);
+      out.push(p);
+    }));
+    return out;
+  }, [previewIdsKey, pathSets, favoritesOnly, favorites]);
+
+  const isFavoriteKey = useCallback((key) => favorites.has(key), [favorites]);
+
+  // The elevation chart: the open generation's route.
+  const shownRoute = mode === 'display' ? currentPath : null;
   const shownProfile = shownRoute?.properties?.elevation_profile;
 
   return (
@@ -1473,8 +1366,8 @@ function App() {
           pendingMarker={pendingMarker}
           pathSetMarkers={pathSetMarkers}
           activePathSetId={activePathSetId}
-          currentPath={currentPath}
-          filteredPaths={filteredPaths}
+          currentPath={mapCurrentPath}
+          filteredPaths={mapPaths}
           drawnSelections={drawnSelections}
           onMapClick={handleMapClick}
           onPinMove={handleMapClick}
@@ -1491,8 +1384,6 @@ function App() {
           draftingRef={draftingRef}
           notice={notice}
           roadIndex={toolRoadIndex}
-          roadsState={favRoadsState}
-          onViewChange={handleViewChange}
           onNeedGraphEdges={requestGraphEdges}
           showGraphRoads={showGraphRoads}
           showSelections={showSelections}
@@ -1512,11 +1403,19 @@ function App() {
           hoveredPathId={hoveredPathId}
           compareGroupOf={compare ? compareGroupOf : null}
           onSelectPath={selectPath}
-          hoveredSetId={mode === 'input' ? hoveredSetId : null}
+          hoveredSetId={mode === 'input' && hoveredSetId ? [].concat(hoveredSetId)[0] : null}
+          onViewChange={setMapView}
+          strongPreview={!!chipHoverId}
+          previewSetIds={previewIds}
+          favoritesOnly={favoritesOnly}
+          pinPreviewKey={pinPreview?.key ?? null}
+          onPinPreview={handlePinPreview}
+          previewPaths={previewPaths}
+          isFavoriteKey={isFavoriteKey}
           centreOn={centreOn}
           showBounds={showBounds}
           boundaryShapes={mode === 'input'
-            ? (favoritesTab ? null : genSettings.boundary?.shapes || null)
+            ? genSettings.boundary?.shapes || null
             : (showBoundary ? activePathSet?.settings?.boundary?.shapes || null : null)}
           boundaryEdit={editingBoundary ? {
             shapes: boundaryDraft.shapes,
@@ -1525,18 +1424,10 @@ function App() {
             change: boundaryEdit.change,
             draftingRef: boundaryDraftingRef,
           } : null}
-          favoritePins={favoritePins}
-          favoritesView={favoritesTab ? {
-            paths: favView.mapPaths, // the faint routes, and the only ones a click can pick: the focus's
-            onClickAway: () => favView.select(null), // a click on empty map: nothing selected, every faint route back
-            current: favView.current,
-            hoveredId: favView.hoveredId,
-            onSelect: favView.select,
-          } : null}
           isFavorite={isFavorite}
           favoriteHue={favoriteHueOf(primaryColor)}
           addingToName={addToId ? setsHere.find((g) => g.id === addToId)?.name || null : null}
-          arrowKeysStepRoutes={mode === 'display' || (favoritesTab && !activeTool)}
+          arrowKeysStepRoutes={mode === 'display'}
         />
 
         <ControlPanel
@@ -1553,11 +1444,13 @@ function App() {
           toolsProps={toolsProps}
           generations={generations}
           onOpenGeneration={openGenerationFromList}
+          onOpenGroup={openGroupFromList}
           onDeleteGeneration={handleDeleteGeneration}
           activeGeneration={panelGeneration}
           generationProps={{
             paths: filteredPaths,
             totalCount: totalPathsCount,
+            chosenTotal,
             currentPath,
             onSelectPath: selectPath,
             onHoverPath: setHoveredPathId,
@@ -1578,7 +1471,7 @@ function App() {
             onStop: handleStopGeneration,
             onBack: closeGeneration,
             onRename: (name) => renamePathSet(activePathSetId, name),
-            onDelete: () => handleDeleteGeneration(activePathSetId),
+            onDelete: () => handleDeleteGeneration(combined?.chosenSetId || activePathSetId),
             onNewSearchHere: newSearchFromGeneration,
             more: currentMore,
             onMoreChange: setCurrentMore,
@@ -1600,6 +1493,7 @@ function App() {
           onChooseStart={chooseStart}
           onRenameGeneration={renamePathSet}
           onHoverGeneration={setHoveredSetId}
+          mapView={mapView}
           boundaryProps={{
             boundaries,
             selected: genSettings.boundary,
@@ -1617,17 +1511,17 @@ function App() {
             onCancel: cancelBoundaryDraft,
             onDelete: boundaryDraft.id ? deleteBoundaryDraft : null,
           } : null}
-          favoritesPage={favoritesPageProps}
           favoriteCount={favorites.size}
-          onOpenFavorites={() => {
-            setActiveTool(null);
-            setPlanTab('favorites');
-          }}
+          favoritesOnly={favoritesOnly}
+          onFavoritesOnly={showFavoritesOnly}
         />
 
         {undo && (
           <div className="undo-toast" role="status">
-            <span>Deleted “{undo.name}”.</span>
+            <span>
+              Deleted “{undo.name}”.
+              {undo.keptCount > 0 && ` ${undo.keptCount === 1 ? 'Its favorite is' : `Its ${undo.keptCount} favorites are`} kept in “Favorites from deleted sets”.`}
+            </span>
             <button type="button" onClick={handleUndoDelete}>Undo</button>
           </div>
         )}

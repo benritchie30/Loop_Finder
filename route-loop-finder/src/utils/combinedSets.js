@@ -13,6 +13,9 @@ import { newestFirst } from './pathSetGroups';
  * sets: [{ id, name, createdAt, paths }]. Returns
  * { paths, ownerOf: Map(route id -> set id), alsoIn: Map(route id -> [set id]), setIds (newest first) }.
  */
+/** A chip under the pointer meaning All (every set's routes), for the map preview. */
+export const ALL_SETS = '*all*';
+
 export function combineSets(sets) {
     const ordered = newestFirst((sets || []).filter((s) => s && s.id != null));
     const paths = [];

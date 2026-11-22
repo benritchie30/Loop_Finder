@@ -130,38 +130,3 @@ export function nearestGroup(groups, lat, lng) {
     return best;
 }
 
-/**
- * The Favorites tab's Road tool: which of the map tiles under favorites
- * (`tiles`, downloaded ones) to load road pieces for. Only those in view or
- * near it (the view grown by `pad` of its size on each side), so favorites
- * elsewhere (another city) load nothing until the map goes there. Zoomed so
- * far out that more than `max` would be needed: only those in view; still too
- * many: none, and tooMany (the Road tool asks to zoom in).
- * view: { south, west, north, east }. Returns { tiles, tooMany }.
- */
-export function tilesNearView(tiles, view, { deg = TILE_DEG, pad = 0.25, max = 24 } = {}) {
-    if (!view || !tiles?.length) return { tiles: [], tooMany: false };
-    const within = (grow) => {
-        const dLat = (view.north - view.south) * grow;
-        const dLng = (view.east - view.west) * grow;
-        const [r0, c0] = tileOf(view.south - dLat, view.west - dLng, deg);
-        const [r1, c1] = tileOf(view.north + dLat, view.east + dLng, deg);
-        return tiles.filter(([r, c]) => r >= r0 && r <= r1 && c >= c0 && c <= c1);
-    };
-    const near = within(pad);
-    if (near.length <= max) return { tiles: near, tooMany: false };
-    const inView = within(0);
-    return inView.length <= max ? { tiles: inView, tooMany: false } : { tiles: [], tooMany: true };
-}
-
-/**
- * What the Road tool can do in the Favorites tab with `near` (tilesNearView's
- * answer) when `has(tile)` says which tiles' road pieces have come: 'zoom'
- * (zoom in), 'none' (no favorite near the view), 'loading' (some still on
- * their way), 'ready'.
- */
-export function roadTilesState(near, has) {
-    if (near?.tooMany) return 'zoom';
-    if (!near?.tiles?.length) return 'none';
-    return near.tiles.every((t) => has(t)) ? 'ready' : 'loading';
-}

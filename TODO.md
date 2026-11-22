@@ -17,7 +17,7 @@
 - 
 ## Done
 
-- [x] Favorites page (the plan's Favorites button): sort (date favorited, best, the route measures), group (by set, by start, none; near the map first), filters and In map view, star pins per start (deleted sets' too), ‹ › and arrows.
+- [x] Pins and favorites: a pin under the pointer previews its routes (the other pins hidden), a click opens them (a chip per set), a right-click its menu; one Favorites switch for the pins and lists; a deleted set's favorites kept. (Replaces the Favorites page.)
 - [x] Generation pins: a menu on every pin (open a set, New set from here, Show all routes from here with two or more sets), closed by any click elsewhere; a start pin placed by hand, or Plan again from here, starts a new set.
 - [x] All routes from here: every set of a start as one list (a route once, Best taking turns), each card naming its set, More routes into a chosen set.
 - [x] Faster with many routes: the faint routes' canvas only repaints when the list changes; the Favorites page loads road pieces only near the view.

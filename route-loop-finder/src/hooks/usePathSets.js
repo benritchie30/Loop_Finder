@@ -3,11 +3,12 @@ import { FILTER_METRICS, OPEN_RANGE, filterByMetrics, metricBounds, sanitizeRout
 import { filterByRouteSelections } from '../utils/routeSelections';
 import { applyPaint } from '../utils/paintRoads';
 import { deleteGeneration, loadGenerations, saveGeneration } from '../utils/generationsDb';
-import { lengthRange, sameStart } from '../utils/pathSetGroups';
+import { lengthRange, routesBounds, sameStart } from '../utils/pathSetGroups';
 import { combineSets } from '../utils/combinedSets';
 import { routeKey } from '../utils/routeIdentity';
 import { compareSets, countGroups, inView, swappedView } from '../utils/compareSets';
 import { reverseUnpaved } from '../utils/surface';
+import { keptSets } from '../utils/keptSets';
 
 function newRouteId(pathSetId) {
     return typeof crypto !== 'undefined' && crypto.randomUUID
@@ -32,7 +33,11 @@ const SAVE_DELAY_MS = 1200;
 const STREAM_SAVE_MS = 20000; // while a generation is still receiving routes
 const ADD_BATCH_MS = 100; // routes that arrive within this are added together (one render)
 
-/** Next unused name, so two searches from the same place stay apart. */
+/**
+ * Next unused name, so two searches from the same place stay apart: the
+ * place, then "<place> #2", "#3"... (the # keeps the number apart from a
+ * route count beside the name).
+ */
 export function suggestGenerationName(base, pathSets) {
     const used = new Set();
     Object.values(pathSets || {}).forEach((set) => {
@@ -41,8 +46,8 @@ export function suggestGenerationName(base, pathSets) {
     const label = base || 'Generation';
     if (!used.has(label)) return label;
     let n = 2;
-    while (used.has(`${label} ${n}`)) n += 1;
-    return `${label} ${n}`;
+    while (used.has(`${label} #${n}`) || used.has(`${label} ${n}`)) n += 1;
+    return `${label} #${n}`;
 }
 
 /** What is kept in the browser for a generation. */
@@ -114,7 +119,11 @@ export function usePathSets({ favorites = null } = {}) {
     const [activeId, setActiveId] = useState(null);
     const [selectedPathId, setSelectedPathId] = useState(null);
     const [hoveredPathId, setHoveredPathId] = useState(null);
-    const [favoritesOnly, setFavoritesOnly] = useState(false);
+    // Favorites only: one switch for the whole app (the pins on the map and the
+    // open list), remembered between visits; opening a set leaves it as it is.
+    const [favoritesOnly, setFavoritesOnly] = useState(() => {
+        try { return localStorage.getItem('favoritesOnly') === '1'; } catch { return false; }
+    });
     const [keptIds, setKeptIds] = useState(() => new Set()); // unfavorited in favorites only, still listed
     const [routeFilters, setRouteFilters] = useState(readRouteFilters);
     const [sortBy, setSortBy] = useState(() => {
@@ -130,6 +139,14 @@ export function usePathSets({ favorites = null } = {}) {
     const [combinedAt, setCombinedAt] = useState(null);
     const combinedRef = useRef(combinedAt);
     combinedRef.current = combinedAt;
+    // All routes from here: the set chips chosen (only their routes listed; Ctrl-click
+    // chooses several), or none (All). combinedSetId: the one chosen, when only one is.
+    const [combinedSetIds, setCombinedSetIds] = useState([]);
+    const combinedSetId = combinedSetIds.length === 1 ? combinedSetIds[0] : null;
+    const combinedSetRef = useRef(combinedSetId);
+    combinedSetRef.current = combinedSetId;
+    const combinedSetIdsRef = useRef(combinedSetIds);
+    combinedSetIdsRef.current = combinedSetIds;
 
     // ---- saved generations ----
 
@@ -158,6 +175,28 @@ export function usePathSets({ favorites = null } = {}) {
 
     const pathSetsRef = useRef(pathSets);
     pathSetsRef.current = pathSets;
+
+    // Kept sets (utils/keptSets): the favorites of deleted generations, shown
+    // like generations (a pin, a list, a place in all routes from here) but
+    // never saved: they come from the favorites. allSets: both, for reading;
+    // changes go to pathSets only. Made again only when a set comes or goes.
+    const setIdsKey = Object.keys(pathSets).join('|');
+    const kept = useMemo(
+        () => (hydrated ? keptSets(favorites, pathSetsRef.current) : {}),
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+        [hydrated, favorites, setIdsKey],
+    );
+    const allSets = useMemo(() => ({ ...pathSets, ...kept }), [pathSets, kept]);
+    const allSetsRef = useRef(allSets);
+    allSetsRef.current = allSets;
+    // A chosen chip whose set is gone (deleted, or a kept set renamed by its start's oldest set going) is dropped.
+    useEffect(() => {
+        if (combinedSetIds.some((id) => !allSets[id])) setCombinedSetIds((prev) => prev.filter((id) => allSets[id]));
+    }, [combinedSetIds, allSets]);
+    const favoriteCountOf = useCallback(
+        (paths) => (favorites ? paths.filter((p) => favorites.has(routeKey(p))).length : 0),
+        [favorites],
+    );
     const activeIdRef = useRef(activeId);
     activeIdRef.current = activeId;
 
@@ -239,12 +278,13 @@ export function usePathSets({ favorites = null } = {}) {
 
     // Selections belong to the open generation (saved with it and shown when it
     // is opened again). In input mode they are the plan's, for the first search.
-    // In all routes from here they are the view's own (not saved).
+    // In all routes from here they are the chosen set's (its chip), or with
+    // All chosen the view's own (not saved).
     const selectionsRef = useRef(drawnSelections);
     selectionsRef.current = drawnSelections;
     useEffect(() => {
-        const id = activeIdRef.current;
-        if (!id || combinedRef.current) return;
+        const id = combinedRef.current ? combinedSetRef.current : activeIdRef.current;
+        if (!id) return;
         setPathSets((prev) => {
             const pathSet = prev[id];
             if (!pathSet || pathSet.selections === drawnSelections) return prev;
@@ -286,9 +326,14 @@ export function usePathSets({ favorites = null } = {}) {
     // ---- generations ----
 
     // A generation starts: meta is its name, settings and selections (else
-    // the ones painted now go with it). It becomes the open one.
+    // the ones painted now go with it). It becomes the open one; at a start
+    // that has other sets, as all routes from there with its chip chosen
+    // (the others one click away), else by itself.
     const createPathSet = useCallback((pathSetId, markerPosition, meta) => {
         const info = meta || {};
+        // (a kept set there counts: its favorites are one chip away)
+        const shared = !!markerPosition && Object.values(allSetsRef.current)
+            .some((set) => sameStart(set.markerPosition, markerPosition));
         setPathSets((prev) => ({
             ...prev,
             [pathSetId]: {
@@ -304,7 +349,8 @@ export function usePathSets({ favorites = null } = {}) {
             },
         }));
         setActiveId(pathSetId);
-        setCombinedAt(null);
+        setCombinedAt(shared ? { lat: markerPosition.lat, lng: markerPosition.lng } : null);
+        setCombinedSetIds(shared ? [pathSetId] : []);
         setSelectedPathId(null);
         setCompareState(null);
         resetFilterRanges();
@@ -377,7 +423,8 @@ export function usePathSets({ favorites = null } = {}) {
     const selectPathSet = useCallback((pathSetId, addSelections = null) => {
         setActiveId(pathSetId || null);
         setCombinedAt(null);
-        let selections = pathSetId ? (pathSets[pathSetId]?.selections || []) : [];
+        setCombinedSetIds([]);
+        let selections = pathSetId ? (allSets[pathSetId]?.selections || []) : [];
         if (pathSetId && addSelections?.length) {
             const have = new Set(selections.map((sel) => sel.id));
             selections = [...selections, ...addSelections.filter((sel) => !have.has(sel.id))];
@@ -385,28 +432,32 @@ export function usePathSets({ favorites = null } = {}) {
         setDrawnSelections(selections);
         setSelectedPathId(null);
         setHoveredPathId(null);
-        setFavoritesOnly(false);
         setKeptIds(new Set());
         setCompareState(null);
         if (pathSetId) resetFilterRanges();
-    }, [pathSets, resetFilterRanges]);
+    }, [allSets, resetFilterRanges]);
 
     /**
      * All routes from here: every generation that starts at `position`, as one
      * list. More routes adds to the newest of them (setCombinedTarget picks
-     * another). Nothing happens when none starts there. options: { favorites }
-     * opens it in favorites only; { routeKey } shows the route with that key
-     * (utils/routeIdentity) when it is there.
+     * another). Nothing happens when none starts there. options: { routeKey }
+     * shows the route with that key (utils/routeIdentity) when it is there;
+     * { chosenId } opens it with that set's chip chosen (only its routes, its
+     * painted roads; More routes adds to it).
      */
     const showCombined = useCallback((position, options = {}) => {
         if (!position) return;
-        const here = Object.entries(pathSets)
+        const here = Object.entries(allSets)
             .filter(([, set]) => sameStart(set.markerPosition, position))
             .sort(([, a], [, b]) => (b.createdAt || 0) - (a.createdAt || 0));
         if (!here.length) return;
+        const chosen = options.chosenId && here.some(([id]) => id === options.chosenId) ? options.chosenId : null;
         setCombinedAt({ lat: position.lat, lng: position.lng });
-        setActiveId(here[0][0]);
-        setDrawnSelections([]);
+        setCombinedSetIds(chosen ? [chosen] : []);
+        // More routes adds to the chosen set, else the newest (not a kept set, which cannot grow).
+        const grows = here.filter(([, set]) => !set.kept);
+        setActiveId(chosen && grows.some(([id]) => id === chosen) ? chosen : (grows[0] || here[0])[0]);
+        setDrawnSelections(chosen ? allSets[chosen]?.selections || [] : []);
         // The route asked for, as the list has it (a route two sets found is listed once).
         const shown = options.routeKey
             ? combineSets(here.map(([id, set]) => ({ id, name: set.name, createdAt: set.createdAt, paths: set.paths })))
@@ -414,16 +465,40 @@ export function usePathSets({ favorites = null } = {}) {
             : null;
         setSelectedPathId(shown?.id ?? null);
         setHoveredPathId(null);
-        setFavoritesOnly(!!options.favorites);
         setKeptIds(new Set());
         setCompareState(null);
         resetFilterRanges();
-    }, [pathSets, resetFilterRanges]);
+    }, [allSets, resetFilterRanges]);
+
+    /**
+     * All routes from here: list only the chosen sets' routes (null: all of
+     * them). A plain choice is that set alone; `add` (Ctrl-click) adds it to
+     * the chosen ones, or takes it out when it is one of them. One set chosen
+     * brings its painted roads and areas (saved with it); All has none; with
+     * several, what is painted stays (the view's own, not saved). More routes
+     * adds to the first chosen set that can grow (a kept set cannot).
+     */
+    const chooseCombinedSet = useCallback((pathSetId, add = false) => {
+        if (!combinedRef.current) return;
+        const prev = combinedSetIdsRef.current;
+        const id = pathSetId || null;
+        let next;
+        if (!id) next = [];
+        else if (add) next = prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id];
+        else next = [id];
+        if (next.length === prev.length && next.every((x, i) => x === prev[i])) return;
+        setCombinedSetIds(next);
+        const target = next.find((x) => pathSets[x]);
+        if (target) setActiveId(target);
+        if (next.length === 1) setDrawnSelections(allSets[next[0]]?.selections || []);
+        else if (!next.length) setDrawnSelections([]);
+        setKeptIds(new Set());
+    }, [pathSets, allSets]);
 
     /** All routes from here: the generation More routes adds to (the list and the shown route stay). */
     const setCombinedTarget = useCallback((pathSetId) => {
         const at = combinedRef.current;
-        const set = pathSets[pathSetId];
+        const set = pathSets[pathSetId]; // (More routes cannot add to a kept set)
         if (!at || !set || !sameStart(set.markerPosition, at)) return;
         setActiveId(pathSetId);
     }, [pathSets]);
@@ -454,11 +529,17 @@ export function usePathSets({ favorites = null } = {}) {
         });
         savedRef.current.delete(pathSetId);
         deleteGeneration(pathSetId);
+        // All routes from here with other sets left: they stay listed (All chosen).
+        const at = combinedRef.current;
+        const left = at ? Object.entries(pathSets)
+            .filter(([id, set]) => id !== pathSetId && sameStart(set.markerPosition, at))
+            .sort(([, a], [, b]) => (b.createdAt || 0) - (a.createdAt || 0)) : [];
+        setCombinedSetIds((prev) => (prev.includes(pathSetId) ? prev.filter((x) => x !== pathSetId) : prev));
         if (activeIdRef.current === pathSetId) {
-            setActiveId(null);
+            setActiveId(left.length ? left[0][0] : null);
             setDrawnSelections([]);
         }
-        return { id: pathSetId, set: removed };
+        return { id: pathSetId, set: removed, stays: left.length > 0 };
     }, [pathSets]);
 
     const restorePathSet = useCallback((removed) => {
@@ -468,9 +549,9 @@ export function usePathSets({ favorites = null } = {}) {
 
     // ---- the open generation's routes ----
 
-    const activeSet = activeId ? pathSets[activeId] || null : null;
+    const activeSet = activeId ? allSets[activeId] || null : null;
     // Comparing: B still exists and is not A.
-    const otherSet = compareState && compareState.otherId !== activeId ? pathSets[compareState.otherId] || null : null;
+    const otherSet = compareState && compareState.otherId !== activeId ? allSets[compareState.otherId] || null : null;
     const comparison = useMemo(
         () => (activeSet && otherSet ? compareSets(activeSet.paths, otherSet.paths) : null),
         [activeSet, otherSet],
@@ -478,20 +559,25 @@ export function usePathSets({ favorites = null } = {}) {
     // All routes from here: the routes of every generation at that start, as one list.
     const combination = useMemo(() => {
         if (!combinedAt) return null;
-        const sets = Object.entries(pathSets)
+        const sets = Object.entries(allSets)
             .filter(([, set]) => sameStart(set.markerPosition, combinedAt))
             .map(([id, set]) => ({ id, name: set.name, createdAt: set.createdAt, paths: set.paths }));
         return sets.length ? combineSets(sets) : null;
-    }, [combinedAt, pathSets]);
+    }, [combinedAt, allSets]);
     const combined = useMemo(() => (combination ? {
         key: `all:${combinedAt.lat.toFixed(6)},${combinedAt.lng.toFixed(6)}`,
         position: combinedAt,
         setIds: combination.setIds, // newest first
         ownerOf: (pathId) => combination.ownerOf.get(pathId) ?? null, // the set the listed route is from
         alsoIn: (pathId) => combination.alsoIn.get(pathId) || [], // other sets that found it too
-    } : null), [combination, combinedAt]);
+        // Did this set find the listed route (as its owner, or too)?
+        has: (pathId, setId) => combination.ownerOf.get(pathId) === setId
+            || (combination.alsoIn.get(pathId) || []).includes(setId),
+        chosenSetIds: combinedSetIds, // the set chips chosen ([]: All)
+        chosenSetId: combinedSetId, // the one chosen, when only one is
+    } : null), [combination, combinedAt, combinedSetIds, combinedSetId]);
     const allPaths = useMemo(
-        () => combination?.paths || comparison?.paths || activeSet?.paths || [],
+        () => comparison?.paths || combination?.paths || activeSet?.paths || [],
         [combination, comparison, activeSet],
     );
     const compareGroupOf = useCallback(
@@ -499,7 +585,7 @@ export function usePathSets({ favorites = null } = {}) {
         [comparison],
     );
 
-    const generations = useMemo(() => Object.entries(pathSets)
+    const generations = useMemo(() => Object.entries(allSets)
         .map(([id, set]) => ({
             id,
             name: set.name || 'Generation',
@@ -513,27 +599,39 @@ export function usePathSets({ favorites = null } = {}) {
             selections: set.selections || [],
             createdAt: set.createdAt || 0,
             batches: set.batches || 0,
+            kept: !!set.kept, // favorites from deleted sets (utils/keptSets)
+            place: set.place || null, // a kept set: its deleted set's place
+            favoriteCount: favoriteCountOf(set.paths),
+            bounds: routesBounds(set.paths), // around its routes (Your loops: is it in the map's view)
         }))
-        .sort((a, b) => b.createdAt - a.createdAt), [pathSets]);
+        .sort((a, b) => b.createdAt - a.createdAt), [allSets, favoriteCountOf]);
+
+    // The chosen sets' routes (all routes from here with chips chosen), else every route:
+    // what the list shows before filters, and what the filter bars span.
+    const chosenPaths = useMemo(() => {
+        const ids = combined?.chosenSetIds || [];
+        if (!ids.length || comparison) return allPaths;
+        return allPaths.filter((p) => ids.some((id) => combined.has(p.id, id)));
+    }, [allPaths, combined, comparison]);
 
     const filterBounds = useMemo(() => {
         const bounds = {};
         FILTER_METRICS.forEach((metric) => {
-            bounds[metric.key] = metricBounds(allPaths, metric);
+            bounds[metric.key] = metricBounds(chosenPaths, metric);
         });
         return bounds;
-    }, [allPaths]);
+    }, [chosenPaths]);
 
     // Routes that pass the filters (before the compare view picks a group).
     const matchingPaths = useMemo(() => {
-        if (!allPaths.length) return [];
-        let paths = filterByMetrics(allPaths, routeFilters);
+        if (!chosenPaths.length) return [];
+        let paths = filterByMetrics(chosenPaths, routeFilters);
         paths = filterByRouteSelections(paths, drawnSelections);
         if (favoritesOnly) {
             paths = paths.filter((p) => keptIds.has(p.id) || (favorites && favorites.has(routeKey(p))));
         }
         return paths;
-    }, [allPaths, routeFilters, drawnSelections, favoritesOnly, favorites, keptIds]);
+    }, [chosenPaths, routeFilters, drawnSelections, favoritesOnly, favorites, keptIds]);
 
     const compareView = comparison ? compareState.view : 'all';
     const filteredPaths = useMemo(() => {
@@ -566,11 +664,11 @@ export function usePathSets({ favorites = null } = {}) {
     const swapCompare = useCallback(() => {
         const a = activeIdRef.current;
         const b = compareState?.otherId;
-        if (!a || !b || !pathSets[b]) return;
+        if (!a || !b || !allSets[b]) return;
         setActiveId(b);
-        setDrawnSelections(pathSets[b].selections || []);
+        setDrawnSelections(allSets[b].selections || []);
         setCompareState({ otherId: a, view: swappedView(compareState.view) });
-    }, [compareState, pathSets]);
+    }, [compareState, allSets]);
 
     const currentPath = useMemo(() => {
         if (!selectedPathId) return filteredPaths[0] || null;
@@ -608,6 +706,7 @@ export function usePathSets({ favorites = null } = {}) {
     const showFavoritesOnly = useCallback((on) => {
         setFavoritesOnly(!!on);
         setKeptIds(new Set());
+        try { localStorage.setItem('favoritesOnly', on ? '1' : '0'); } catch { /* private mode */ }
     }, []);
 
     // A new sort keeps the shown route (the list scrolls to it).
@@ -635,7 +734,7 @@ export function usePathSets({ favorites = null } = {}) {
     const prevPath = useCallback(() => step(-1), [step]);
 
     // Oldest first: a pin shared by several generations sits at the first one's start.
-    const pathSetMarkers = useMemo(() => Object.entries(pathSets)
+    const pathSetMarkers = useMemo(() => Object.entries(allSets)
         .map(([id, set]) => ({
             id,
             name: set.name || 'Generation',
@@ -644,8 +743,13 @@ export function usePathSets({ favorites = null } = {}) {
             pathCount: set.paths.length,
             lengthRange: lengthRange(set.paths),
             createdAt: set.createdAt || 0,
+            kept: !!set.kept,
+            favoriteCount: favoriteCountOf(set.paths),
+            // Its routes' keys (utils/routeIdentity), so a pin of several sets
+            // counts a route two of them found once.
+            routeKeys: set.paths.map((p) => routeKey(p) || p.id),
         }))
-        .sort((a, b) => a.createdAt - b.createdAt), [pathSets, activeId]);
+        .sort((a, b) => a.createdAt - b.createdAt), [allSets, activeId, favoriteCountOf]);
 
     // Flip the elevation profile of the shown route (ride it the other way).
     const reverseCurrentPathProfile = useCallback(() => {
@@ -677,7 +781,7 @@ export function usePathSets({ favorites = null } = {}) {
 
     return {
         // State
-        pathSets,
+        pathSets: allSets, // every generation, and the kept sets (read only)
         hydrated,
         activePathSetId: activeId,
         activePathSet: activeSet,
@@ -686,6 +790,7 @@ export function usePathSets({ favorites = null } = {}) {
         filteredPaths,
         totalPathsCount: allPaths.length,
         allPaths, // every route of the open generation (or of all routes from here), before filters
+        chosenTotal: chosenPaths.length, // all routes from here: the chosen sets' routes (all of them: allPaths)
         combined, // all routes from here: { key, position, setIds, ownerOf, alsoIn } or null
         generations,
         routeFilters,
@@ -732,6 +837,7 @@ export function usePathSets({ favorites = null } = {}) {
         keepListed,
         showCombined,
         setCombinedTarget,
+        chooseCombinedSet,
         startCompare,
         setCompareView,
         swapCompare,

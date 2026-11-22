@@ -5,7 +5,6 @@ import './ControlPanel.css';
 import PlanCard from './PlanCard';
 import AdvancedSettings from './AdvancedSettings';
 import GenerationsList from './GenerationsList';
-import FavoritesPage from './FavoritesPage';
 import BoundaryEditor from './BoundaryEditor';
 import GenerationPanel from './GenerationPanel';
 import ViewOptions from './ViewOptions';
@@ -14,9 +13,9 @@ import ViewOptions from './ViewOptions';
  * The panel on the right, sized to fit the window without scrolling (only
  * lists scroll, inside their own boxes).
  * - No generation open: the plan (start, length, roads, through / avoid,
- *   Find loops), "Your loops" with the Favorites button beside it, and
- *   Advanced settings at the bottom, which opens as a page over the whole panel.
- * - The Favorites page (FavoritesPage): every favorite, over the whole panel.
+ *   Find loops), "Your loops" with the Favorites switch beside it (the
+ *   app's one "favorites only": the pins, this list and an open set's list),
+ *   and Advanced settings at the bottom, which opens as a page over the whole panel.
  * - A generation open: its routes (GenerationPanel).
  */
 function ControlPanel({
@@ -35,6 +34,7 @@ function ControlPanel({
     // saved generations
     generations = [],
     onOpenGeneration,
+    onOpenGroup, // Your loops: a start's name opens all its sets
     onDeleteGeneration,
     // open generation
     activeGeneration,
@@ -47,16 +47,19 @@ function ControlPanel({
     onChooseStart,
     onRenameGeneration,
     onHoverGeneration,
-    favoritesPage = null, // FavoritesPage's props while the Favorites page is open
-    favoriteCount = 0, // every favorite (the plan's Favorites button)
-    onOpenFavorites, // open the Favorites page
+    mapView = null, // { south, west, north, east }: Your loops lists the starts in view first
+    favoriteCount = 0, // every favorite (the Favorites switch's count)
+    favoritesOnly = false, // the app's Favorites switch
+    onFavoritesOnly, // (on)
     boundaryProps = null, // the plan's search area: PlanCard's boundary props
     boundaryEditor = null, // a boundary being drawn or edited: BoundaryEditor's props (its own page)
 }) {
     const [minimized, setMinimized] = useState(false);
     const [advancedOpen, setAdvancedOpen] = useState(false);
     const showGeneration = mode === 'display' && activeGeneration;
-    const title = showGeneration ? activeGeneration.name : favoritesPage ? 'Favorites' : 'Plan a loop';
+    // Favorites only: the sets with favorites (a deleted set's kept ones too).
+    const listed = favoritesOnly ? generations.filter((g) => g.favoriteCount > 0) : generations;
+    const title = showGeneration ? activeGeneration.name : 'Plan a loop';
 
     // A generation opening (even one started from the Advanced page, with
     // Enter) closes Advanced: going back from it shows the plan.
@@ -131,14 +134,6 @@ function ControlPanel({
         );
     }
 
-    if (favoritesPage) {
-        return (
-            <div className="control-panel control-panel--full">
-                <FavoritesPage {...favoritesPage} headerActions={actions} toolsProps={toolsProps} />
-            </div>
-        );
-    }
-
     if (boundaryEditor && !showGeneration) {
         return (
             <div className="control-panel control-panel--full">
@@ -188,31 +183,40 @@ function ControlPanel({
                 <div className="panel-section panel-section--grow">
                     <div className="plan-lists__head">
                         <span className="section-label">
-                            Your loops <span className="plan-lists__count">{generations.length}</span>
+                            Your loops <span className="plan-lists__count">{listed.length}</span>
                         </span>
-                        <button
-                            type="button"
-                            className="fav-open-btn"
-                            onClick={onOpenFavorites}
-                            title="Every favorite route, on its own page: sort, group, filter, step through them"
-                        >
-                            <Star size={13} fill="currentColor" />
-                            <span>Favorites</span>
-                            <span className="fav-open-btn__count">{favoriteCount}</span>
-                            <ChevronRight size={14} />
-                        </button>
+                        {onFavoritesOnly && (
+                            <button
+                                type="button"
+                                className={`fav-toggle ${favoritesOnly ? 'is-on' : ''}`}
+                                onClick={() => onFavoritesOnly(!favoritesOnly)}
+                                aria-pressed={favoritesOnly}
+                                title={favoritesOnly
+                                    ? 'Show every start and route (V)'
+                                    : 'Show only the starts with favorites, and only their favorite routes (V)'}
+                            >
+                                <Star size={12} fill={favoritesOnly ? 'currentColor' : 'none'} />
+                                <span>Favorites</span>
+                                <span className="fav-toggle__count">{favoriteCount}</span>
+                            </button>
+                        )}
                     </div>
-                    {generations.length > 0 ? (
+                    {listed.length > 0 ? (
                         <GenerationsList
-                            generations={generations}
+                            generations={listed}
+                            favoritesOnly={favoritesOnly}
+                            view={mapView}
                             onOpen={onOpenGeneration}
+                            onOpenGroup={onOpenGroup}
                             onDelete={onDeleteGeneration}
                             onRename={onRenameGeneration}
                             onHover={onHoverGeneration}
                             showHeader={false}
                         />
                     ) : (
-                        <div className="gen-empty">No loops yet: set a start and press Find loops.</div>
+                        <div className="gen-empty">
+                            {favoritesOnly ? 'No favorites yet. Open a set and press S (or a card’s star) on a route you like.' : 'No loops yet: set a start and press Find loops.'}
+                        </div>
                     )}
                 </div>
             )}

@@ -352,10 +352,6 @@ html:root[data-style='classic'][data-theme='dark'] {
   box-shadow: none;
 }
 
-[data-style='classic'] .fav-open-btn {
-  border-radius: var(--radius-md);
-}
-
 /* ---- on the map ---- */
 
 [data-style='classic'] .map-view__status,

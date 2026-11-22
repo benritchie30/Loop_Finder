@@ -193,12 +193,12 @@ const LinesCanvas = L.Renderer.extend({
 
     setGroups(groups) {
         this._groups = groups || [];
-        // Dev server (utils/devHooks) only: what the canvas draws (colour, number of lines per
+        // Dev server (utils/devHooks) only: what the canvas draws (colour, opacity, number of lines per
         // style, and whether it is the halo under other lines), for the
         // browser checks (backend/tools/check_frontend.py).
         if (EXPOSE_STATE && this._container) {
             this._container.dataset.lines = JSON.stringify(this._groups
-                .map((g) => ({ color: g.style?.color ?? null, lines: (g.items || []).length, halo: !!g.halo })));
+                .map((g) => ({ color: g.style?.color ?? null, opacity: g.style?.opacity ?? null, lines: (g.items || []).length, halo: !!g.halo })));
         }
         if (!this._map || this._frame) return;
         this._frame = L.Util.requestAnimFrame(() => {

@@ -6,7 +6,7 @@ import { emptyHistory, recordVisit, stepHistory } from '../utils/routeHistory';
  * and redo. Every change of the shown route is recorded (arrow keys, cards,
  * clicks on the map, the first route of a generation, a route hidden by a
  * filter giving way to another), except the ones made by stepping here.
- * A new `resetKey` (another generation opened, the Favorites tab entered)
+ * A new `resetKey` (another generation opened, or all routes from a start)
  * starts a new history.
  *
  * Returns step(dir, canShow, select): dir -1 back, 1 forward; canShow(id)

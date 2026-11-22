@@ -62,5 +62,17 @@ export function useFavorites() {
         return true;
     }, []);
 
-    return { favorites, isFavorite, toggleFavorite };
+    /** Unfavorite every route of `paths` that is a favorite (a kept set's Remove). */
+    const removeFavorites = useCallback((paths) => {
+        const keys = (paths || []).map(routeKey).filter((key) => key && favoritesRef.current.has(key));
+        if (!keys.length) return;
+        setFavorites((prev) => {
+            const next = new Map(prev);
+            keys.forEach((key) => next.delete(key));
+            return next;
+        });
+        keys.forEach((key) => deleteFavorite(key));
+    }, []);
+
+    return { favorites, isFavorite, toggleFavorite, removeFavorites };
 }

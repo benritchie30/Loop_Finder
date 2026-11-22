@@ -635,6 +635,116 @@
     overscroll-behavior: contain;
 }
 
+/* Your loops by start: a header per start (folds it), its sets under it */
+.gen-group {
+    display: flex;
+    flex-direction: column;
+    flex: 0 0 auto;
+}
+
+.gen-group + .gen-group {
+    margin-top: 4px;
+}
+
+.gen-group__head {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    border-radius: var(--radius-md);
+    color: var(--color-text-muted);
+    transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.gen-group__head:hover {
+    background: var(--color-surface);
+    color: var(--color-text);
+}
+
+/* The arrow folds the start's sets; the name opens all of them */
+.gen-group__fold {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    border: none;
+    border-radius: var(--radius-sm, 6px);
+    background: none;
+    color: inherit;
+    cursor: pointer;
+}
+
+.gen-group__fold:hover {
+    background: var(--color-border);
+}
+
+.gen-group__open {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 10px 5px 2px;
+    border: none;
+    background: none;
+    color: inherit;
+    font: inherit;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    text-align: left;
+    cursor: pointer;
+}
+
+.gen-group__open:hover .gen-group__name {
+    color: var(--color-primary);
+}
+
+.gen-group__chevron {
+    flex: 0 0 auto;
+    transition: transform var(--transition-fast);
+}
+
+.gen-group__fold[aria-expanded="false"] .gen-group__chevron {
+    transform: rotate(-90deg);
+}
+
+.gen-group__name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.gen-group__near {
+    flex: 0 0 auto;
+    padding: 1px 6px;
+    border-radius: var(--radius-pill);
+    background: var(--color-primary-light);
+    color: var(--color-primary);
+    font-size: 9.5px;
+    letter-spacing: 0.02em;
+}
+
+.gen-group__count {
+    margin-left: auto;
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0;
+}
+
+.gen-group__sets {
+    list-style: none;
+    margin: 0;
+    padding: 0 0 0 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+}
+
 .gen-list__row {
     position: relative;
     display: flex;
@@ -839,148 +949,63 @@
     letter-spacing: 0;
 }
 
-.fav-open-btn {
+/* All routes from here: one chip per set (All first); one chosen lists only its routes */
+.set-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 0 16px 10px;
+}
+
+.set-chip {
     display: inline-flex;
     align-items: center;
     gap: 5px;
-    height: 28px;
-    padding: 0 6px 0 10px;
+    max-width: 100%;
+    padding: 4px 10px;
     border: 1px solid var(--color-border);
     border-radius: var(--radius-pill);
     background: var(--color-bg);
+    color: var(--color-text-muted);
     font: inherit;
     font-size: 12px;
-    font-weight: 600;
-    color: var(--color-text);
-    cursor: pointer;
-    transition: border-color var(--transition-fast), background var(--transition-fast);
-}
-
-.fav-open-btn svg:first-child {
-    color: var(--color-favorite);
-}
-
-.fav-open-btn:hover {
-    border-color: var(--color-favorite);
-    background: var(--color-favorite-light);
-}
-
-.fav-open-btn__count {
-    font-family: var(--font-mono);
-    font-size: 11px;
     font-weight: 500;
-    font-variant-numeric: tabular-nums;
-    color: var(--color-text-muted);
-}
-
-.fav-open-btn > svg:last-child {
-    color: var(--color-text-muted);
-}
-
-/* The Favorites page */
-.fav-page__star {
-    color: var(--color-favorite);
-    vertical-align: -1px;
-}
-
-.fav-page__grouping {
-    flex: 1 1 auto;
-}
-
-.fav-page__in-view {
-    margin-left: auto;
-}
-
-/* Every card here is a favorite: only the selected one is marked in the favorite
-   colour (as it is bold in that colour on the map); the rest look like any route's. */
-.fav-page .route-card.is-favorite:not(.is-selected) {
-    border-color: var(--color-border);
-    box-shadow: none;
-}
-
-.fav-page .route-card.is-favorite:not(.is-selected) .sparkline__area {
-    fill: var(--color-primary);
-}
-
-.fav-page .route-card.is-favorite:not(.is-selected) .sparkline__line {
-    stroke: var(--color-primary);
-}
-
-/* Its groups, inside the list of cards */
-.fav-group {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-}
-
-.fav-group + .fav-group {
-    margin-top: 6px;
-}
-
-.fav-group__head {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: 2px 2px 0;
-}
-
-.fav-group__head.is-lit .fav-group__title {
-    color: #ea580c; /* its start's pin is under the pointer (orange, like the pin) */
-}
-
-.fav-group__fold {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 20px;
-    height: 20px;
-    padding: 0;
-    border: none;
-    border-radius: 5px;
-    background: none;
-    color: var(--color-text-muted);
     cursor: pointer;
-    transition: background var(--transition-fast), transform var(--transition-fast);
+    transition: border-color var(--transition-fast), background var(--transition-fast), color var(--transition-fast);
 }
 
-.fav-group__fold:hover {
-    background: var(--color-surface);
+.set-chip:hover {
+    border-color: var(--color-primary);
     color: var(--color-text);
 }
 
-.fav-group__fold.is-folded svg {
-    transform: rotate(-90deg);
+.set-chip.is-on {
+    border-color: var(--color-primary);
+    background: var(--color-primary-light);
+    color: var(--color-primary);
+    font-weight: 600;
 }
 
-.fav-group__title {
-    flex: 0 1 auto;
-    min-width: 0;
-    font-size: 12px;
-    font-weight: 600;
+.set-chip__name {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
 
-.fav-group__gone {
+.set-chip__count {
     flex: 0 0 auto;
     padding: 0 5px;
     border-radius: var(--radius-pill);
     background: var(--color-surface);
-    font-size: 10px;
     color: var(--color-text-muted);
-}
-
-.fav-group__count {
     font-family: var(--font-mono);
     font-size: 10.5px;
-    color: var(--color-text-muted);
+    font-weight: 500;
+    line-height: 16px;
+    font-variant-numeric: tabular-nums;
 }
 
-.fav-group__action {
-    margin-left: auto;
-    display: inline-flex;
-    align-items: center;
-    gap: 2px;
-    white-space: nowrap;
+.set-chip.is-on .set-chip__count {
+    background: var(--color-primary);
+    color: var(--color-bg);
 }

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef } from 'react';
 
 /**
  * A list of route cards (`.route-card`, `data-route-id`) in its own scroll
- * box: a generation's routes (GenerationPanel) and the Favorites page.
+ * box: a generation's routes (GenerationPanel).
  *
  * - The selected card sits in the middle of the list (as near as the ends
  *   allow), so the routes before and after it are one short move away. A
